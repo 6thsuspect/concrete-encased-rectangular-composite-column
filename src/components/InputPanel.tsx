@@ -158,46 +158,6 @@ export function InputPanel({
 
   return (
     <div className="divide-y divide-ink-200/70 dark:divide-ink-800">
-      {/* ------------------------------------------------ toolbar */}
-      <Fieldset title="Presets & files" hint="Start from the reference example, then save, load or export the input set.">
-        <div className="col-span-full space-y-2">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => onPreset(preset)}
-              className={cx(
-                'w-full rounded-lg border px-3 py-2 text-left transition-colors',
-                activePresetId === preset.id
-                  ? 'border-brand-500 bg-brand-50 dark:border-brand-500 dark:bg-brand-500/10'
-                  : 'border-ink-200 hover:border-ink-300 hover:bg-ink-50 dark:border-ink-700 dark:hover:border-ink-600 dark:hover:bg-ink-800/60',
-              )}
-            >
-              <div className="text-[13px] font-medium text-ink-900 dark:text-ink-50">{preset.name}</div>
-              <div className="mt-0.5 text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
-                {preset.description}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        <div className="col-span-full flex flex-wrap items-center gap-1.5 pt-1">
-          <Button size="sm" variant="subtle" onClick={onSaveInputs}>
-            Save
-          </Button>
-          <Button size="sm" variant="subtle" onClick={onLoadInputs}>
-            Load
-          </Button>
-          <ExportMenu onExportReport={onExportReport} onExportJson={onExportJson} onExportCsv={onExportCsv} />
-          <Button size="sm" variant="ghost" onClick={onPrint}>
-            Print
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onReset}>
-            Reset all
-          </Button>
-        </div>
-      </Fieldset>
-
       {/* ------------------------------------------------ validation */}
       <Fieldset
         title={`Validation${errors.length || warnings.length ? ` — ${errors.length} error(s), ${warnings.length} warning(s)` : ''}`}
@@ -676,6 +636,46 @@ export function InputPanel({
         <div className="col-span-full rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-500 dark:bg-ink-900/50 dark:text-ink-400">
           Reference values: hn,z = 78.5 mm (report: 78.6 mm) and hn,y = 95.2 mm (report: 94.4 mm). The influence of
           the rounding on the D/C ratio is small and is reported in the validation panel.
+        </div>
+      </Fieldset>
+
+      {/* ------------------------------------------------ presets & files */}
+      <Fieldset title="Presets & files" hint="Start from the reference example, then save, load or export the input set.">
+        <div className="col-span-full space-y-2">
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onPreset(preset)}
+              className={cx(
+                'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                activePresetId === preset.id
+                  ? 'border-brand-500 bg-brand-50 dark:border-brand-500 dark:bg-brand-500/10'
+                  : 'border-ink-200 hover:border-ink-300 hover:bg-ink-50 dark:border-ink-700 dark:hover:border-ink-600 dark:hover:bg-ink-800/60',
+              )}
+            >
+              <div className="text-[13px] font-medium text-ink-900 dark:text-ink-50">{preset.name}</div>
+              <div className="mt-0.5 text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
+                {preset.description}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="col-span-full flex flex-wrap items-center gap-1.5 pt-1">
+          <Button size="sm" variant="subtle" onClick={onSaveInputs}>
+            Save
+          </Button>
+          <Button size="sm" variant="subtle" onClick={onLoadInputs}>
+            Load
+          </Button>
+          <ExportMenu onExportReport={onExportReport} onExportJson={onExportJson} onExportCsv={onExportCsv} />
+          <Button size="sm" variant="ghost" onClick={onPrint}>
+            Print
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onReset}>
+            Reset all
+          </Button>
         </div>
       </Fieldset>
     </div>
