@@ -20,6 +20,11 @@ export function BarTable({ inputs, onUpdate, onAdd, onRemove, onReset }: Props) 
   const instances = barInstances(inputs.bars)
   const Ast = instances.reduce((a, b) => a + b.area, 0)
   const dbMax = instances.reduce((m, b) => Math.max(m, b.db), 0)
+  const circular = inputs.sectionType === 'circular'
+  const rings = inputs.bars.filter((b) => b.spread === 'ring')
+  const minPitch = rings.length
+    ? Math.min(...rings.map((r) => (2 * Math.PI * Math.abs(r.x)) / Math.max(1, Math.round(r.count))))
+    : 0
 
   const cells = 'w-[62px] shrink-0'
 
@@ -35,8 +40,12 @@ export function BarTable({ inputs, onUpdate, onAdd, onRemove, onReset }: Props) 
               <Th className="w-[52px]">Nos.</Th>
               <Th className="w-[74px]">Arr.</Th>
               <Th className={cells}>Cover</Th>
-              <Th className={cells}>X mm</Th>
-              <Th className={cells}>Y mm</Th>
+              <Th className={cells} title="ring radius (ring rows) or z-coordinate">
+                {circular ? 'R mm' : 'X mm'}
+              </Th>
+              <Th className={cells} title="start angle in degrees (ring rows) or y-coordinate">
+                {circular ? 'φ °' : 'Y mm'}
+              </Th>
               <Th className="w-[30px]">{''}</Th>
             </tr>
           </thead>
@@ -96,6 +105,7 @@ export function BarTable({ inputs, onUpdate, onAdd, onRemove, onReset }: Props) 
                   >
                     <option value="corner">corner</option>
                     <option value="point">point</option>
+                    <option value="ring">ring</option>
                   </select>
                 </Td>
                 <Td>
@@ -156,16 +166,25 @@ export function BarTable({ inputs, onUpdate, onAdd, onRemove, onReset }: Props) 
       <p className="text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
         Ast = <span className="tabular font-medium text-ink-700 dark:text-ink-200">{fmt(Ast, 1)}</span> mm² in{' '}
         {instances.length} bar{instances.length === 1 ? '' : 's'}
-        {dbMax > 0 ? ` (largest ⌀${fmt(dbMax, 0)})` : ''} · Ast/(bc·hc) ={' '}
-        {fmt((Ast / Math.max(inputs.bc * inputs.hc, 1e-9)) * 100, 3)} %. Coordinates X, Y are measured from the
-        concrete centroid; a corner row places four bars at (±X, ±Y).
+        {dbMax > 0 ? ` (largest ⌀${fmt(dbMax, 0)})` : ''} ·{' '}
+        {circular
+          ? `Ast/Ag = ${fmt((Ast / Math.max((Math.PI * inputs.diameter ** 2) / 4, 1e-9)) * 100, 3)} %`
+          : `Ast/(bc·hc) = ${fmt((Ast / Math.max(inputs.bc * inputs.hc, 1e-9)) * 100, 3)} %`}
+        .{' '}
+        {circular
+          ? `Ring rows place n bars evenly on a circle of radius R starting at the angle φ; the pitch along the ring is p = 2πR/n${rings.length ? ` (smallest here ${fmt(minPitch, 0)} mm)` : ''}.`
+          : 'Coordinates X, Y are measured from the concrete centroid; a corner row places four bars at (±X, ±Y).'}
       </p>
     </div>
   )
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <th className={cx('px-1.5 py-1.5 font-semibold whitespace-nowrap', className)}>{children}</th>
+function Th({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
+  return (
+    <th title={title} className={cx('px-1.5 py-1.5 font-semibold whitespace-nowrap', className)}>
+      {children}
+    </th>
+  )
 }
 
 function Td({ children }: { children: React.ReactNode }) {

@@ -78,10 +78,16 @@ interface Props {
  * reinforcement position table and the principal dimensions.
  */
 export function CrossSection({ inputs, className, preview = false }: Props) {
-  const { bc, hc, h, bf, tf, tw, r, sectionType } = inputs
+  const { h, bf, tf, tw, r, sectionType } = inputs
+  const circular = sectionType === 'circular'
+  /* for a circular encasement both dimensions are the diameter */
+  const bc = circular ? inputs.diameter : inputs.bc
+  const hc = circular ? inputs.diameter : inputs.hc
   const hasSlab = sectionType === 'rect-slab' && inputs.slabWidth > 0 && inputs.slabThickness > 0
   const bs = hasSlab ? inputs.slabWidth : 0
   const ts = hasSlab ? inputs.slabThickness : 0
+  const D = inputs.diameter
+  const R = D / 2
 
   const totalWidth = Math.max(bc, bs)
   const totalHeight = hc + ts
@@ -103,6 +109,7 @@ export function CrossSection({ inputs, className, preview = false }: Props) {
   const py = (y: number) => cy - y * scale
 
   const bars: BarInstance[] = barInstances(inputs.bars)
+  const ringRows = inputs.bars.filter((b) => b.spread === 'ring')
   const barR = (db: number) => Math.max((db * scale) / 2, preview ? 1.4 : 1.8)
   const tfPx = Math.max(tf * scale, 1.2)
   const steelX = px(-bf / 2)
@@ -130,15 +137,40 @@ export function CrossSection({ inputs, className, preview = false }: Props) {
       aria-label="Concrete-encased composite cross-section"
     >
       {/* encasement */}
-      <rect
-        x={px(-bc / 2)}
-        y={py(hc / 2)}
-        width={bc * scale}
-        height={hc * scale}
-        className="fill-ink-200 dark:fill-ink-800"
-        stroke="#64748b"
-        strokeWidth={1.2}
-      />
+      {circular ? (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={R * scale}
+          className="fill-ink-200 dark:fill-ink-800"
+          stroke="#64748b"
+          strokeWidth={1.2}
+        />
+      ) : (
+        <rect
+          x={px(-bc / 2)}
+          y={py(hc / 2)}
+          width={bc * scale}
+          height={hc * scale}
+          className="fill-ink-200 dark:fill-ink-800"
+          stroke="#64748b"
+          strokeWidth={1.2}
+        />
+      )}
+      {/* peripheral reinforcement ring(s) */}
+      {circular &&
+        ringRows.map((row) => (
+          <circle
+            key={`ring-${row.id}`}
+            cx={cx}
+            cy={cy}
+            r={Math.abs(row.x) * scale}
+            fill="none"
+            stroke="#94a3b8"
+            strokeWidth={0.9}
+            strokeDasharray="6 3 1.5 3"
+          />
+        ))}
       {/* slab */}
       {hasSlab && (
         <rect
@@ -185,7 +217,7 @@ export function CrossSection({ inputs, className, preview = false }: Props) {
           </g>
           <path d={`M${px(-bc / 2)} 15 l6 -3 v6 z M${px(bc / 2)} 15 l-6 -3 v6 z`} fill={dim} />
           <text x={cx} y={11} textAnchor="middle" fontSize={10} fill={text} className="dark:fill-ink-300">
-            {fmt(bc, 0)}
+            {circular ? `⌀${fmt(bc, 0)}` : fmt(bc, 0)}
           </text>
 
           {/* overall depth */}
@@ -229,6 +261,12 @@ export function CrossSection({ inputs, className, preview = false }: Props) {
             <text x={W - 20} y={py(-hc / 2) + 14} textAnchor="end">
               {bars.length} bars · ⌀{fmt(Math.max(0, ...bars.map((b) => b.db)), 0)} max
             </text>
+            {circular &&
+              ringRows.map((row) => (
+                <text key={`ring-label-${row.id}`} x={px(-bc / 2) + 3} y={py(-hc / 2) - 6}>
+                  {row.count} × ⌀{fmt(row.db, 0)} on ⌀{fmt(2 * Math.abs(row.x), 0)}
+                </text>
+              ))}
           </g>
         </>
       )}

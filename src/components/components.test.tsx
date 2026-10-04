@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { computeAll } from '../lib/calc'
-import { DEFAULT_INPUTS, inputProblems } from '../lib/calc/defaults'
+import { DEFAULT_INPUTS, PRESETS, cloneInputs, inputProblems } from '../lib/calc/defaults'
 import { SummaryPanel } from './SummaryPanel'
 import { StepsView } from './StepsPanel'
 import { ValidationPanel } from './ValidationPanel'
@@ -18,6 +18,15 @@ import { buildReportHtml } from '../lib/report'
 import { resultsToCsv, resultsToJson } from '../lib/exportData'
 
 const results = computeAll(DEFAULT_INPUTS)
+
+/** The circular preset, resolved to a full input set. */
+const circularPreset = PRESETS.find((p) => p.id === 'circular') as (typeof PRESETS)[number]
+const circularInputs = cloneInputs({
+  ...DEFAULT_INPUTS,
+  ...circularPreset.patch,
+  bars: (circularPreset.patch.bars ?? DEFAULT_INPUTS.bars).map((b) => ({ ...b })),
+})
+const circularResults = computeAll(circularInputs)
 
 /** Even-odd ray casting for a simple polygon. */
 function insidePolygon(p: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
@@ -92,6 +101,67 @@ describe('components', () => {
     expect((steelR as RegExpExecArray)[1]).not.toEqual(d)
     // ... and the preview uses the same drawing
     expect(renderToStaticMarkup(<CrossSection inputs={DEFAULT_INPUTS} preview />)).toContain('fill-ink-900')
+  })
+
+  it('draws the circular encasement with its peripheral cage', () => {
+    const html = renderToStaticMarkup(<CrossSection inputs={circularInputs} />)
+    // the encasement is a circle, and so is every ring of reinforcement
+    expect(html).toContain('<circle')
+    const radii = [...html.matchAll(/<circle[^>]*r="([\d.]+)"/g)].map((m) => Number(m[1]))
+    expect(radii.length).toBeGreaterThanOrEqual(3) // outline + ring + bars
+    expect(Math.max(...radii)).toBeGreaterThan(100) // the outline
+    expect(html).toContain('⌀600')
+    expect(html).toContain('12 × ⌀25 on ⌀500')
+    expect(html).not.toContain('<rect') // no rectangular outline is drawn
+  })
+
+  it('renders the circular section, its checks and the design panel', () => {
+    const noop = () => undefined
+    const html = renderToStaticMarkup(
+      <InputPanel
+        inputs={circularInputs}
+        results={circularResults}
+        problems={inputProblems(circularInputs)}
+        setInput={noop}
+        patchInputs={noop}
+        onPreset={noop}
+        onReset={noop}
+        activePresetId="circular"
+        onSaveInputs={noop}
+        onLoadInputs={noop}
+        onExportReport={noop}
+        onExportJson={noop}
+        onExportCsv={noop}
+        onPrint={noop}
+      />,
+    )
+    expect(html).toContain('Circular encasement')
+    expect(html).toContain('Outside diameter')
+    expect(html).not.toContain('Concrete depth') // hc is not part of a circle
+    expect(html).toContain('R mm')
+    expect(html).toContain('Design of the peripheral reinforcement')
+    expect(html).toContain('Required steel for the target')
+    expect(html).toContain('Ast/Ag')
+    expect(html).toContain('pitch mm')
+    expect(html).toContain('>ring<')
+    expect(html).toContain('Use</button>')
+
+    // the calculation sheet reports the circular geometry and the checks
+    const steps = renderToStaticMarkup(<StepsView groups={circularResults.groups} />)
+    expect(steps).toContain('circular encasement ⌀600')
+    expect(steps).toContain('pitch of the peripheral bars along the ring')
+    expect(steps).toContain('number of longitudinal bars on the periphery')
+    expect(steps).toContain('D³/6')
+
+    // and the printed report lists D and the ring row
+    const report = renderToStaticMarkup(
+      <ReportView inputs={circularInputs} results={circularResults} meta={DEFAULT_META} />,
+    )
+    expect(report).toContain('circular encasement')
+    expect(report).toContain('on a ring of ⌀500 mm')
+    const exported = buildReportHtml(circularInputs, circularResults, { ...DEFAULT_META, appVersion: 'test' })
+    expect(exported).toContain('circular')
+    expect(exported).toContain('⌀500')
   })
 
   it('renders every calculation group', () => {

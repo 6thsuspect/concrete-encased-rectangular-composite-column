@@ -1,4 +1,4 @@
-import type { BarRow, Inputs, UnitSettings } from '../types'
+import type { BarRow, Inputs, SectionType, UnitSettings } from '../types'
 import { findConcrete, findRebar, findSteel } from './grades'
 
 /** Default unit selection (the units of the reference example). */
@@ -20,6 +20,26 @@ export const newBarRow = (id: string, index: number): BarRow => ({
   y: 150,
   spread: 'corner',
 })
+
+/** Default peripheral cage of the circular preset: 12 ⌀25 bars, 50 mm cover. */
+export const REFERENCE_RING: BarRow[] = [
+  { id: 'ring-1', label: 'B1', db: 25, count: 12, layer: '1', cover: 50, x: 250, y: 0, spread: 'ring' },
+]
+
+/** A new row for the reinforcement table, seeded for the current section type. */
+export function newRowFor(i: Inputs, id: string): BarRow {
+  const index = i.bars.length
+  if (i.sectionType === 'circular') {
+    const rho = Math.max(i.diameter / 2 - i.cover, 0)
+    return { id, label: `B${index + 1}`, db: 20, count: 6, layer: `${index + 1}`, cover: i.cover, x: rho, y: 0, spread: 'ring' }
+  }
+  return {
+    ...newBarRow(id, index),
+    cover: i.cover,
+    x: Math.max(i.bc / 2 - i.cover, 0),
+    y: Math.max(i.hc / 2 - i.cover, 0),
+  }
+}
 
 /**
  * Inputs of the reference example (CSI Software Verification, ETABS,
@@ -71,6 +91,7 @@ export const DEFAULT_INPUTS: Inputs = {
   cover: 41,
   slabWidth: 1000,
   slabThickness: 150,
+  diameter: 600,
   h: 260,
   bf: 256,
   tf: 17.3,
@@ -85,6 +106,8 @@ export const DEFAULT_INPUTS: Inputs = {
   hnZOverride: null,
   hnYOverride: null,
 }
+
+const SECTION_TYPES: SectionType[] = ['rect', 'rect-slab', 'circular']
 
 /** Deep copy of an input set (the bar table is copied row by row). */
 export function cloneInputs(i: Inputs): Inputs {
@@ -113,6 +136,10 @@ export function normalizeInputs(raw: unknown): Inputs {
       if ((key === 'hnZOverride' || key === 'hnYOverride') && value === null && key in src) out[key] = null
       continue
     }
+    if (key === 'sectionType') {
+      if (SECTION_TYPES.includes(value as SectionType)) out[key] = value
+      continue
+    }
     if (typeof value === typeof base[key] || (typeof base[key] === 'number' && typeof value === 'number')) {
       out[key] = value
     }
@@ -138,17 +165,18 @@ export function normalizeInputs(raw: unknown): Inputs {
 function normalizeBar(raw: unknown, idx: number): BarRow {
   const b = (raw ?? {}) as Record<string, unknown>
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
-  const spread = b.spread === 'point' ? 'point' : 'corner'
-  const count = Math.max(b.spread === 'corner' ? 4 : 1, Math.round(num(b.count, spread === 'corner' ? 4 : 1)))
+  const spread = b.spread === 'point' ? 'point' : b.spread === 'ring' ? 'ring' : 'corner'
+  const minCount = spread === 'corner' ? 4 : spread === 'ring' ? 6 : 1
+  const count = Math.max(minCount, Math.round(num(b.count, minCount)))
   return {
     id: typeof b.id === 'string' && b.id ? b.id : `bar-${idx + 1}`,
     label: typeof b.label === 'string' && b.label ? b.label : `B${idx + 1}`,
-    db: num(b.db, 12),
+    db: num(b.db, spread === 'ring' ? 25 : 12),
     count,
     layer: typeof b.layer === 'string' && b.layer ? b.layer : `${idx + 1}`,
-    cover: num(b.cover, 0),
-    x: num(b.x, 150),
-    y: num(b.y, 150),
+    cover: num(b.cover, spread === 'ring' ? 50 : 0),
+    x: num(b.x, spread === 'ring' ? 250 : 150),
+    y: num(b.y, spread === 'ring' ? 0 : 150),
     spread,
   }
 }
@@ -242,6 +270,23 @@ export const PRESETS: Preset[] = [
     },
   },
   {
+    id: 'circular',
+    name: 'Circular column ⌀600, 12 ⌀25 peripheral',
+    description:
+      'Circular encasement (an extension): ⌀600 mm with twelve ⌀25 bars on a ⌀500 mm ring and the same embedded I-section.',
+    patch: {
+      sectionType: 'circular',
+      diameter: 600,
+      cover: 50,
+      h: 260,
+      bf: 256,
+      tf: 17.3,
+      tw: 10.5,
+      bars: REFERENCE_RING.map((b) => ({ ...b })),
+      astcModel: 'positions',
+    },
+  },
+  {
     id: 'slab',
     name: 'Encasement with slab',
     description: 'The same column cast with a 1000 × 150 mm slab (an extension of the reference method).',
@@ -302,6 +347,51 @@ export function inputProblems(i: Inputs): InputProblem[] {
   if (i.cover > 0 && 2 * (i.hc / 2 - i.cover) < 0)
     p.push({ level: 'warn', message: 'The cover leaves no room for reinforcement.' })
 
+  /* circular encasement */
+  if (i.sectionType === 'circular') {
+    pos('diameter', i.diameter)
+    if (i.cover >= i.diameter / 2)
+      p.push({ level: 'error', message: 'The cover must be smaller than the radius of the circular section.' })
+    const diagonal = Math.hypot(i.bf / 2, i.h / 2)
+    if (diagonal >= i.diameter / 2)
+      p.push({
+        level: 'error',
+        message: `The embedded I-section does not fit inside the circle: its corner radius ${diagonal.toFixed(1)} mm exceeds R = ${(i.diameter / 2).toFixed(1)} mm.`,
+      })
+    else if (diagonal > i.diameter / 2 - i.cover)
+      p.push({
+        level: 'warn',
+        message: `The I-section corner (${diagonal.toFixed(1)} mm) intrudes into the cover zone of the circular section (R − cover = ${(i.diameter / 2 - i.cover).toFixed(1)} mm).`,
+      })
+    if (i.astcModel === 'reference')
+      p.push({
+        level: 'warn',
+        message:
+          'The circular section always evaluates the peripheral cage bar by bar inside the 2hn band — the "two corner bars" model does not apply to a ring.',
+      })
+    const ringRows = i.bars.filter((b) => b.spread === 'ring')
+    if (ringRows.length === 0)
+      p.push({ level: 'error', message: 'A circular section needs at least one ring row of peripheral reinforcement.' })
+    for (const row of ringRows) {
+      const rho = Math.abs(row.x)
+      if (row.count < 6)
+        p.push({ level: 'error', message: `${row.label}: a circular cage needs at least 6 bars (IS 456:2000 cl. 26.5.3.1) — ${row.count} given.` })
+      if (rho + row.db / 2 > i.diameter / 2 + 1e-6)
+        p.push({ level: 'error', message: `${row.label}: the ring radius ${rho} mm places the bars outside the ⌀${i.diameter} mm circle.` })
+      const implied = i.diameter / 2 - rho
+      if (Math.abs(implied - row.cover) > 1 + 1e-9 && row.cover > 0)
+        p.push({
+          level: 'warn',
+          message: `${row.label}: the ring radius implies a cover of ${implied.toFixed(0)} mm but ${row.cover} mm is given.`,
+        })
+      const pitch = (2 * Math.PI * rho) / Math.max(1, Math.round(row.count))
+      if (pitch > 300)
+        p.push({ level: 'warn', message: `${row.label}: the pitch of the peripheral bars is ${pitch.toFixed(0)} mm (> 300 mm).` })
+      if (pitch < 75)
+        p.push({ level: 'warn', message: `${row.label}: the pitch of the peripheral bars is ${pitch.toFixed(0)} mm (< 75 mm) — bars are very close.` })
+    }
+  }
+
   /* section type */
   if (i.sectionType === 'rect-slab') {
     pos('slabWidth', i.slabWidth)
@@ -317,6 +407,11 @@ export function inputProblems(i: Inputs): InputProblem[] {
   const ids = new Set<string>()
   i.bars.forEach((bar, idx) => {
     const name = bar.label || `row ${idx + 1}`
+    if (bar.spread === 'ring' && i.sectionType !== 'circular')
+      p.push({
+        level: 'error',
+        message: `${name}: a ring row is only meaningful for a circular section — choose another arrangement or switch the section type.`,
+      })
     if (ids.has(bar.id)) p.push({ level: 'error', message: `Duplicate reinforcement row id "${bar.id}".` })
     ids.add(bar.id)
     if (!(bar.db > 0)) p.push({ level: 'error', message: `${name}: the bar diameter must be greater than zero.` })
@@ -324,10 +419,14 @@ export function inputProblems(i: Inputs): InputProblem[] {
     if (bar.spread === 'corner' && bar.count % 4 !== 0)
       p.push({ level: 'warn', message: `${name}: a corner arrangement uses multiples of four bars (${bar.count} given).` })
     if (bar.cover < 0) p.push({ level: 'error', message: `${name}: the cover cannot be negative.` })
-    const half = i.sectionType === 'rect-slab' ? i.slabWidth / 2 : i.bc / 2
-    const halfY = i.hc / 2 + (i.sectionType === 'rect-slab' ? i.slabThickness : 0)
-    if (Math.abs(bar.x) + bar.db / 2 > half + 1e-6 || Math.abs(bar.y) + bar.db / 2 > halfY + 1e-6)
-      p.push({ level: 'warn', message: `${name}: the bar at (${bar.x}, ${bar.y}) mm falls outside the concrete outline.` })
+    if (bar.spread === 'ring') {
+      // the ring checks above cover the circular outline
+    } else {
+      const half = i.sectionType === 'rect-slab' ? i.slabWidth / 2 : i.bc / 2
+      const halfY = i.hc / 2 + (i.sectionType === 'rect-slab' ? i.slabThickness : 0)
+      if (Math.abs(bar.x) + bar.db / 2 > half + 1e-6 || Math.abs(bar.y) + bar.db / 2 > halfY + 1e-6)
+        p.push({ level: 'warn', message: `${name}: the bar at (${bar.x}, ${bar.y}) mm falls outside the concrete outline.` })
+    }
   })
   if (i.bars.length > 0 && i.bars.every((b) => b.spread === 'corner' && b.x === 0 && b.y === 0))
     p.push({ level: 'warn', message: 'All bars sit at the section centroid — the section has no flexural reinforcement.' })

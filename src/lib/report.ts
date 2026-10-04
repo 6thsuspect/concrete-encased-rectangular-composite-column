@@ -150,9 +150,16 @@ export function buildReportHtml(
     ['My', num(inputs.My, 0), 'kN-m'],
   ])}
   ${inputTable('Concrete section', [
-    ['type', inputs.sectionType === 'rect-slab' ? 'rect + slab' : 'rectangular', ''],
-    ['bc', num(inputs.bc, 0), 'mm'],
-    ['hc', num(inputs.hc, 0), 'mm'],
+    ['type', inputs.sectionType === 'rect-slab' ? 'rect + slab' : inputs.sectionType === 'circular' ? 'circular' : 'rectangular', ''],
+    ...(inputs.sectionType === 'circular'
+      ? ([
+          ['D', num(inputs.diameter, 0), 'mm'],
+          ['R', num(inputs.diameter / 2, 0), 'mm'],
+        ] as [string, string, string][])
+      : ([
+          ['bc', num(inputs.bc, 0), 'mm'],
+          ['hc', num(inputs.hc, 0), 'mm'],
+        ] as [string, string, string][])),
     ['cover', num(inputs.cover, 0), 'mm'],
     ...(inputs.sectionType === 'rect-slab'
       ? ([
@@ -198,7 +205,11 @@ export function buildReportHtml(
       ? inputs.bars.map((row, i) => [
           row.label || `B${i + 1}`,
           `${row.count} × ⌀${num(row.db, 0)} mm ` +
-            (row.spread === 'corner' ? `at (±${num(row.x, 0)}, ±${num(row.y, 0)})` : `at (${num(row.x, 0)}, ${num(row.y, 0)})`) +
+            (row.spread === 'corner'
+              ? `at (±${num(row.x, 0)}, ±${num(row.y, 0)})`
+              : row.spread === 'ring'
+                ? `on a ring of ⌀${num(2 * Math.abs(row.x), 0)} mm from ${num(row.y, 0)}°`
+                : `at (${num(row.x, 0)}, ${num(row.y, 0)})`) +
             `${row.layer ? ` · layer ${row.layer}` : ''}${row.cover ? ` · cover ${num(row.cover, 0)} mm` : ''}`,
           '',
         ])

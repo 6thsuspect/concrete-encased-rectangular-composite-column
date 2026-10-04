@@ -32,7 +32,7 @@ npm run dev          # → http://localhost:5173   web app with hot reload
 npm run dev:desktop  # → same dev server inside an Electron window
 npm run build        # type-checks and produces a static bundle in dist/
 npm run build:desktop# static bundle + dist-electron/ + installers in release/
-npm test             # 72 unit / rendering tests (engine, inputs, UI)
+npm test             # 85 unit / rendering tests (engine, inputs, UI)
 npm run typecheck    # tsc --noEmit for the app and for the Electron/Node code
 npm run preview      # serve the production bundle locally
 ```
@@ -56,7 +56,7 @@ In the desktop build the *Export* menu uses native save dialogs and *Print / PDF
 
 | Panel | Content |
 | --- | --- |
-| **Inputs** (sidebar) | The complete design-input form: material grades with auto-filled characteristic values, loadings, concrete section (rectangular or with slab), embedded I-section, the reinforcement position table, member/buckling data, units and advanced overrides — plus save / load / export, live validation and a 2-D section preview. Every change recalculates instantly. |
+| **Inputs** (sidebar) | The complete design-input form: material grades with auto-filled characteristic values, loadings, concrete section (rectangular, with slab or circular), embedded I-section, the reinforcement position table, member/buckling data, units and advanced overrides — plus save / load / export, live validation and a 2-D section preview. Every change recalculates instantly. |
 | **Summary** | D/C headline, capacities, utilisation bars for axial / shear / both bending axes, cross-section and member drawings, both interaction diagrams. |
 | **Interaction diagrams** | P–M interaction diagram per principal axis: the plastic curve A→B→C→D, the simplified bilinear curve A→B→D, the key points and the design point of the member. |
 | **Calculations** | The complete calculation sheet, group by group: symbol, expression, numeric substitution, value, unit, governing check and the source cell of the reference workbook. |
@@ -83,7 +83,8 @@ interface Inputs {
   units: { length: 'mm' | 'm', stress: 'N/mm²' | 'MPa' }
   Ky, Kz, Ly, Lz, alphaImpZ, alphaImpY, psi  // member
   PD, PL, Mz, My                             // loadings
-  sectionType, bc, hc, cover, slabWidth, slabThickness
+  sectionType, bc, hc, cover, diameter,      // diameter for the circular type
+    slabWidth, slabThickness
   h, bf, tw, tf, r                           // embedded I-section
   bars: BarRow[]                             // reinforcement position table
   astcModel: 'reference' | 'positions'
@@ -93,7 +94,8 @@ interface Inputs {
 
 A reinforcement row is `{ id, label, db, count, layer, cover, x, y, spread }`. `corner` places four bars at
 (±X, ±Y) — the benchmark is one such row, 4 ⌀12 at e = 159 mm — while `point` stacks `count` bars at a single
-position. All section properties of the reinforcement (`Ast`, `Ist,z`, `Ist,y`, `Zpr,z`, `Zpr,y`) are derived
+position and `ring` distributes `count` bars evenly on a circle of radius `x = R` starting at the angle `y = φ`
+(0° on the +z axis), as required by a peripheral cage. All section properties of the reinforcement (`Ast`, `Ist,z`, `Ist,y`, `Zpr,z`, `Zpr,y`) are derived
 from the table by the parallel-axis theorem, and the table drives the 2-D preview, the report, the CSV/JSON
 exports and the saved input file.
 
@@ -159,8 +161,29 @@ These options go beyond the verified configuration and are labelled as such in t
   against the neutral-axis depth instead: `Astc = Σ Ast,i` for `|eᵢ| ≤ hn` and `Zprn = Σ Ast,i |eᵢ|`, solved
   together with `hn` by a small fixed-point iteration. For the benchmark cage both models agree, because the
   corner bars lie outside the 2hn band, while `Zprn` remains zero.
+* **Circular encasement (`sectionType: 'circular'`)** — a circular column with the reinforcement in a peripheral
+  ring and the I-section encased in it. The concrete plasticity relations of the reference method are rewritten
+  for the circle: the compression block is the circular strip `|y| ≤ hn`,
+  `Ac = πD²/4 − As − Ast`, `Ic = πD⁴/64 − …`, `Zpc = D³/6 − …`, and the neutral axis follows from
+  `hn · [3.2 fc √(R² − hn²) + 2 tw (fy,d − 0.8 fc)] = 0.8 Ac fc − Astc (fyk,d − 0.8 fc)`, solved by bisection
+  (no rounding, unlike the rectangular closed form). The ring is always evaluated bar by bar, so `Astc` is the
+  steel inside the 2hn band. Detailing follows IS 456:2000 cl. 26.5.3.1: at least six bars, ⌀ ≥ 12 mm,
+  0.8 % ≤ Ast/Ag ≤ 6 % and a pitch along the ring between 75 mm and 300 mm. Preset *Circular column
+  ⌀600, 12 ⌀25 peripheral*: D/C = 0.509.
 * **Root radius `r`** — drawing and detailing only; the section properties ignore it, exactly as the reference
   method does.
+
+---
+
+### Design of the peripheral reinforcement
+
+For a circular section the input panel adds a design aid (`src/lib/design.ts`): it bisects the reinforcement area
+until the demand/capacity ratio of the cage reaches a target D/C (1.0 by default), reports the required steel
+next to the 0.8 % / 6 % limits of IS 456, and tabulates one arrangement per standard bar diameter — the bar count
+(even, ≥ 6), the resulting `Ast`, `Ast/Ag`, the pitch along the ring and the **real D/C of that arrangement**,
+computed with the full engine. The lightest adequate row is recommended (preferring a comfortable pitch of
+100 … 200 mm) and one click writes it into the reinforcement table. Because every candidate is a genuine engine run, the design table can never disagree with
+the calculation sheet.
 
 ---
 
@@ -236,13 +259,14 @@ and in the report), and one slip is corrected:
 │   ├── lib/
 │   │   ├── calc/             ← the calculation engine (no UI dependencies)
 │   │   │   ├── grades.ts         concrete / reinforcement / steel grade libraries
-│   │   │   ├── geometry.ts       bar table, section outline helpers, detailed checks
+│   │   │   ├── geometry.ts       bar table, rect/circular outline helpers, detailed checks
 │   │   │   ├── section.ts        required strengths + section properties
 │   │   │   ├── member.ts         effective stiffness, Pcr, Pd, χ, second-order moments
 │   │   │   ├── interaction.ts    neutral-axis depth, interaction point C, curves
 │   │   │   ├── shear.ts          shear resistance and the D/C ratio
 │   │   │   ├── defaults.ts       reference inputs, presets, normalisation, input validation
 │   │   │   └── index.ts          computeAll()
+│   │   ├── design.ts         design of the peripheral cage of a circular section
 │   │   ├── reference.ts      independent results of the benchmark + tolerances
 │   │   ├── report.ts         standalone HTML report (no external assets)
 │   │   ├── exportData.ts     JSON / CSV / HTML export, print bridge

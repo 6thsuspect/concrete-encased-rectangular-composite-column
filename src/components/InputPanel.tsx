@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { BarRow, Inputs, Results, SectionType } from '../lib/types'
-import { DEFAULT_INPUTS, PRESETS, newBarRow, type InputProblem, type Preset } from '../lib/calc/defaults'
+import { DEFAULT_INPUTS, PRESETS, REFERENCE_RING, newRowFor, type InputProblem, type Preset } from '../lib/calc/defaults'
+import { designRing } from '../lib/design'
 import {
   CONCRETE_GRADES,
   CUSTOM_GRADE,
@@ -11,7 +12,7 @@ import {
   findRebar,
   findSteel,
 } from '../lib/calc/grades'
-import { barInstances } from '../lib/calc/geometry'
+import { barInstances, steelCornerRadius } from '../lib/calc/geometry'
 import { fmt } from '../lib/format'
 import { NumberField, NullableNumberField } from './NumberField'
 import { BarTable } from './BarTable'
@@ -122,6 +123,38 @@ export function InputPanel({
   const setLength = (key: 'Ly' | 'Lz', shown: number) => setInput(key, metres ? shown * 1000 : shown)
 
   const instances = barInstances(inputs.bars)
+  const circular = inputs.sectionType === 'circular'
+  const R = inputs.diameter / 2
+
+  /** Switch the encasement family, converting the ring/corner rows as needed. */
+  const switchSectionType = (next: SectionType) => {
+    if (next === inputs.sectionType) return
+    if (next === 'circular') {
+      const rho = Math.max(inputs.diameter / 2 - inputs.cover, 0)
+      let converted = false
+      const bars = inputs.bars.map((b) => {
+        if (converted || b.spread === 'ring') return b
+        converted = true
+        const count = Math.max(6, Math.round(b.count / 2) * 2)
+        return { ...b, spread: 'ring' as const, count, cover: inputs.cover, x: rho, y: 0 }
+      })
+      patchInputs({ sectionType: next, bars })
+    } else {
+      const bars = inputs.bars.map((b) =>
+        b.spread === 'ring'
+          ? {
+              ...b,
+              spread: 'corner' as const,
+              count: Math.max(4, Math.round(b.count / 4) * 4),
+              cover: inputs.cover,
+              x: Math.max(inputs.bc / 2 - inputs.cover, 0),
+              y: Math.max(inputs.hc / 2 - inputs.cover, 0),
+            }
+          : b,
+      )
+      patchInputs({ sectionType: next, bars })
+    }
+  }
 
   return (
     <div className="divide-y divide-ink-200/70 dark:divide-ink-800">
@@ -448,17 +481,18 @@ export function InputPanel({
       >
         <div className="col-span-full space-y-2">
           <span className="text-[11px] font-medium text-ink-600 dark:text-ink-300">Section type</span>
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             {(
               [
                 ['rect', 'Rectangular encasement'],
                 ['rect-slab', 'Encasement + slab'],
+                ['circular', 'Circular encasement'],
               ] as [SectionType, string][]
             ).map(([value, label]) => (
               <button
                 key={value}
                 type="button"
-                onClick={() => setInput('sectionType', value)}
+                onClick={() => switchSectionType(value)}
                 className={cx(
                   'rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors',
                   inputs.sectionType === value
@@ -472,20 +506,36 @@ export function InputPanel({
           </div>
         </div>
 
-        {num('bc')}
-        {num('hc')}
+        {circular ? num('diameter') : num('bc')}
+        {!circular && num('hc')}
         {num('cover')}
         <div className="col-span-full -mt-1">
           <button
             type="button"
-            onClick={() => patchInputs({ bars: inputs.bars.map((b) => ({ ...b, cover: inputs.cover })) })}
+            onClick={() =>
+              patchInputs({
+                bars: inputs.bars.map((b) =>
+                  circular
+                    ? b.spread === 'ring'
+                      ? { ...b, cover: inputs.cover, x: Math.max(inputs.diameter / 2 - inputs.cover, 0) }
+                      : b
+                    : { ...b, cover: inputs.cover },
+                ),
+              })
+            }
             className="text-[11px] font-medium text-brand-700 hover:underline dark:text-brand-300"
           >
-            Apply this cover to every bar row
+            {circular ? 'Apply this cover to the ring rows' : 'Apply this cover to every bar row'}
           </button>
         </div>
         {inputs.sectionType === 'rect-slab' && num('slabWidth')}
         {inputs.sectionType === 'rect-slab' && num('slabThickness')}
+        {circular && (
+          <p className="col-span-full text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
+            ⌀{fmt(inputs.diameter, 0)} mm circular encasement; R = {fmt(R, 1)} mm. The outermost corner of the
+            embedded I-section is {fmt(steelCornerRadius(inputs), 1)} mm from the centroid and must stay below R.
+          </p>
+        )}
 
         <div className="col-span-full mt-1 border-t border-dashed border-ink-200/70 pt-2.5 dark:border-ink-800">
           <span className="text-[11px] font-semibold tracking-wide text-ink-500 uppercase dark:text-ink-400">
@@ -516,21 +566,22 @@ export function InputPanel({
             let n = inputs.bars.length + 1
             let id = `bar-${n}`
             while (used.has(id)) id = `bar-${++n}`
-            const row: BarRow = {
-              ...newBarRow(id, inputs.bars.length),
-              cover: inputs.cover,
-              x: Math.max(inputs.bc / 2 - inputs.cover, 0),
-              y: Math.max(inputs.hc / 2 - inputs.cover, 0),
-            }
+            const row: BarRow = newRowFor(inputs, id)
             patchInputs({ bars: [...inputs.bars, row] })
           }}
           onRemove={(id) => patchInputs({ bars: inputs.bars.filter((b) => b.id !== id) })}
           onReset={() =>
-            patchInputs({
-              bars: DEFAULT_INPUTS.bars.map((b) => ({ ...b })),
-              cover: DEFAULT_INPUTS.cover,
-              astcModel: DEFAULT_INPUTS.astcModel,
-            })
+            patchInputs(
+              circular
+                ? {
+                    bars: REFERENCE_RING.map((b) => ({ ...b, x: Math.max(inputs.diameter / 2 - inputs.cover, 0), cover: inputs.cover })),
+                    astcModel: 'positions' as const,
+                  }
+                : {
+                    bars: DEFAULT_INPUTS.bars.map((b) => ({ ...b, cover: inputs.cover })),
+                    astcModel: DEFAULT_INPUTS.astcModel,
+                  },
+            )
           }
         />
 
@@ -539,20 +590,28 @@ export function InputPanel({
             Reinforcement inside the compression zone
           </span>
           <select
-            value={inputs.astcModel}
+            value={circular ? 'positions' : inputs.astcModel}
             aria-label="Compression-zone reinforcement model"
+            disabled={circular}
             onChange={(e) => setInput('astcModel', e.target.value as Inputs['astcModel'])}
-            className="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-50"
+            className="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-900 disabled:opacity-60 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-50"
           >
             <option value="reference">Two corner bars — Astc = 2 × Ast,b (reference method)</option>
             <option value="positions">From the bar table — all bars within 2 hn</option>
           </select>
+          {circular && (
+            <span className="mt-1 block text-[11px] text-ink-500 dark:text-ink-400">
+              A peripheral cage is always evaluated bar by bar inside the 2hn band.
+            </span>
+          )}
         </label>
         <p className="col-span-full text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
           {instances.length} bar{instances.length === 1 ? '' : 's'} defined. The reference method assumes two corner
           bars in the compression zone; the position-based option evaluates every bar of the table against the
           neutral-axis depth instead.
         </p>
+
+        {circular && <DesignPanel inputs={inputs} onApply={(row) => patchInputs({ bars: [...inputs.bars.filter((b) => b.spread !== 'ring'), row] })} />}
       </Fieldset>
 
       {/* ------------------------------------------------ member */}
@@ -619,6 +678,127 @@ export function InputPanel({
           the rounding on the D/C ratio is small and is reported in the validation panel.
         </div>
       </Fieldset>
+    </div>
+  )
+}
+
+/**
+ * Design aid for the peripheral reinforcement of a circular section: the
+ * required steel area for a target demand/capacity ratio plus one practical bar
+ * arrangement per standard diameter, every one evaluated with the full engine.
+ */
+function DesignPanel({ inputs, onApply }: { inputs: Inputs; onApply: (row: BarRow) => void }) {
+  const [target, setTarget] = useState(1.0)
+  const design = useMemo(() => designRing(inputs, target), [inputs, target])
+  const template = inputs.bars.find((b) => b.spread === 'ring')
+
+  if (!design || !template) {
+    return (
+      <p className="col-span-full rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-500 dark:bg-ink-900/50 dark:text-ink-400">
+        Add a ring row to the table to design the peripheral reinforcement.
+      </p>
+    )
+  }
+
+  const cell = 'px-1.5 py-1 text-right tabular'
+  return (
+    <div className="col-span-full space-y-2 rounded-lg border border-ink-200/80 p-2.5 dark:border-ink-800">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-semibold tracking-wide text-ink-600 uppercase dark:text-ink-300">
+            Design of the peripheral reinforcement
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
+            Ring ⌀{fmt(2 * design.rho, 0)} mm · gross area Ag = {fmt(design.ag, 0)} mm² · current D/C ={' '}
+            {fmt(design.currentDc, 3)}. Required steel for the target:{' '}
+            <span className="font-medium text-ink-700 dark:text-ink-200">
+              {design.feasible ? `${fmt(design.requiredAst, 0)} mm²` : 'not reached within 6 % of Ag'}
+            </span>
+            {design.feasible && (
+              <>
+                {' '}(minimum {fmt(design.minAst, 0)} mm² = 0.8 % Ag
+                {design.requiredAst < design.minAst ? ', governing' : ''})
+              </>
+            )}
+            .
+          </p>
+        </div>
+        <label className="block w-[104px]">
+          <span className="text-[11px] font-medium text-ink-600 dark:text-ink-300">Target D/C</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            aria-label="Design target D/C"
+            value={String(target)}
+            onChange={(e) => {
+              const v = Number(e.target.value.replace(',', '.'))
+              if (Number.isFinite(v) && v > 0) setTarget(v)
+            }}
+            className="tabular mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm text-ink-900 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-50"
+          />
+        </label>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-ink-200/80 dark:border-ink-800">
+        <table className="w-full min-w-[520px] border-collapse text-[11px]">
+          <thead>
+            <tr className="bg-ink-50 text-left text-ink-500 dark:bg-ink-800/60 dark:text-ink-400">
+              <th className="px-1.5 py-1.5 font-semibold">⌀ mm</th>
+              <th className="px-1.5 py-1.5 font-semibold">n</th>
+              <th className={cx(cell, 'font-semibold')}>Ast mm²</th>
+              <th className={cx(cell, 'font-semibold')}>Ast/Ag %</th>
+              <th className={cx(cell, 'font-semibold')}>pitch mm</th>
+              <th className={cx(cell, 'font-semibold')}>D/C</th>
+              <th className="px-1.5 py-1.5" />
+            </tr>
+          </thead>
+          <tbody>
+            {design.candidates.map((c) => (
+              <tr
+                key={c.db}
+                className={cx(
+                  'border-t border-ink-200/70 dark:border-ink-800',
+                  c.recommended && 'bg-emerald-50/70 dark:bg-emerald-500/10',
+                )}
+              >
+                <td className="px-1.5 py-1 font-medium text-ink-900 dark:text-ink-50">{fmt(c.db, 0)}</td>
+                <td className="px-1.5 py-1">{fmt(c.n, 0)}</td>
+                <td className={cell}>{fmt(c.ast, 0)}</td>
+                <td className={cell}>{fmt(c.ratio, 2)}</td>
+                <td className={cell}>{fmt(c.pitch, 0)}</td>
+                <td className={cx(cell, c.dc <= target ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300')}>
+                  {fmt(c.dc, 3)}
+                </td>
+                <td className="px-1.5 py-1 text-right">
+                  <Button
+                    size="sm"
+                    variant={c.recommended ? 'primary' : 'ghost'}
+                    title={`Use ${c.n} ⌀${c.db} bars`}
+                    onClick={() =>
+                      onApply({
+                        ...template,
+                        spread: 'ring',
+                        db: c.db,
+                        count: c.n,
+                        cover: inputs.cover,
+                        x: Math.max(design.rho, 0),
+                        y: 0,
+                      })
+                    }
+                  >
+                    Use
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] leading-relaxed text-ink-500 dark:text-ink-400">
+        Each row is a full engine run of the cage with n bars of that diameter: the D/C ratio, the steel ratio and
+        the pitch are the real values of that arrangement (recommended: lightest adequate row, {' '}
+        IS 456:2000 detailing rules applied). Applying a row replaces the ring rows of the table.
+      </p>
     </div>
   )
 }
@@ -693,6 +873,7 @@ const LABELS: Record<
   bc: { label: 'Concrete width', symbol: 'bc', unit: 'mm', step: 5 },
   hc: { label: 'Concrete depth', symbol: 'hc', unit: 'mm', step: 5 },
   cover: { label: 'Nominal cover', symbol: 'c', unit: 'mm', step: 1 },
+  diameter: { label: 'Outside diameter (circular)', symbol: 'D', unit: 'mm', step: 25 },
   slabWidth: { label: 'Slab width', symbol: 'bs', unit: 'mm', step: 50 },
   slabThickness: { label: 'Slab thickness', symbol: 'ts', unit: 'mm', step: 10 },
   h: { label: 'I-section depth', symbol: 'h', unit: 'mm', step: 5 },

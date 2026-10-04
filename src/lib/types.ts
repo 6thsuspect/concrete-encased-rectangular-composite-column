@@ -15,11 +15,17 @@
 /* Cross-section description                                           */
 /* ------------------------------------------------------------------ */
 
-/** Encasement type: plain rectangular, optionally with an integral slab. */
-export type SectionType = 'rect' | 'rect-slab'
+/** Encasement type: plain rectangular, optionally with an integral slab, or circular. */
+export type SectionType = 'rect' | 'rect-slab' | 'circular'
 
-/** How the bars of one table row are arranged around its (X, Y) position. */
-export type BarSpread = 'corner' | 'point'
+/**
+ * How the bars of one table row are arranged:
+ *   `corner` → four bars at (±X, ±Y)
+ *   `point`  → `count` bars at the single position (X, Y)
+ *   `ring`   → `count` bars evenly distributed on a circle of radius X about the
+ *              centroid, starting at the angle Y (degrees, +z towards +y)
+ */
+export type BarSpread = 'corner' | 'point' | 'ring'
 
 /** One row of the reinforcement position table. */
 export interface BarRow {
@@ -39,10 +45,7 @@ export interface BarRow {
   x: number
   /** bar centre (or corner offset) from the section centroid along y, mm */
   y: number
-  /**
-   * `corner` → four bars at (±X, ±Y) (count must be 4)
-   * `point`  → `count` bars stacked at (X, Y)
-   */
+  /** arrangement of the row — see `BarSpread` */
   spread: BarSpread
 }
 
@@ -137,6 +140,8 @@ export interface Inputs {
   slabWidth: number
   /** Slab thickness, mm (sectionType = 'rect-slab') */
   slabThickness: number
+  /** Outside diameter of the concrete encasement, mm (sectionType = 'circular') */
+  diameter: number
 
   /* ---------------- embedded steel I-section ---------------- */
   /** Overall depth of the embedded steel I-section (y direction), mm */
@@ -305,7 +310,11 @@ export interface BarsSummary {
 }
 
 export interface ConcreteGeometry {
-  /** encasement width / depth, mm */
+  /** outline family the properties were derived for */
+  kind: SectionType
+  /** encasement diameter, mm (0 for a rectangular encasement) */
+  diameter: number
+  /** encasement width / depth, mm (both equal the diameter for a circle) */
   bc: number
   hc: number
   /** slab, mm (0 when the section has no slab) */
@@ -352,6 +361,8 @@ export interface Results {
     dbMax: number
   }
   concrete: {
+    /** encasement diameter, mm (0 for a rectangular encasement) */
+    diameter: number
     Ac: number
     IcZ: number
     IcY: number

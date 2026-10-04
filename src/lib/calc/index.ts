@@ -50,6 +50,7 @@ export function computeAll(i: Inputs): Results {
     },
     bars: s.bars,
     concrete: {
+      diameter: s.concrete.diameter,
       Ac: s.Ac,
       IcZ: s.IcZ,
       IcY: s.IcY,

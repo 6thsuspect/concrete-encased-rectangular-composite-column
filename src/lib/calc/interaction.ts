@@ -2,7 +2,7 @@ import type { Axis, AxisResult, Inputs, Point, StepGroup } from '../types'
 import { fmt } from '../format'
 import type { SectionProps } from './section'
 import type { MemberResult } from './member'
-import { barsInBand } from './geometry'
+import { barsInBand, circleStripArea, circleStripDerivative, circleStripPlasticModulus } from './geometry'
 
 const n = fmt
 
@@ -103,17 +103,20 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
   const isZ = axis === 'z'
   const symbolAxis = isZ ? 'z' : 'y'
 
-  /* Reinforcement assumed to act in the compression zone.
-     'reference'  → two corner bars (the benchmark assumption, Astc = 2 Ast,b)
-     'positions'  → every bar whose distance from the axis is inside 2 hn      */
-  const byPositions = i.astcModel === 'positions'
+  /* Section family. For a circular encasement the compression block is the
+     circular strip |y| ≤ hn (or |x| ≤ hn) instead of the 2hn rectangle, and the
+     peripheral cage is always evaluated bar by bar — the reference assumption
+     of "two corner bars" does not apply to a ring of bars.                   */
+  const circular = i.sectionType === 'circular'
+  const byPositions = circular || i.astcModel === 'positions'
   const Astb = s.bars.count > 0 ? s.bars.Ast / s.bars.count : 0
   const band = (hn: number) => barsInBand(s.bars.instances, axis, hn)
 
   /* Effective concrete stress-block strength used by the reference.
      The z-axis expressions carry αc; the published y-axis expressions do not
-     (an asymmetry of the benchmark which is reproduced here verbatim). */
-  const fc = isZ ? (i.alphaC * i.fck) / i.gammaC : i.fck / i.gammaC
+     (an asymmetry of the benchmark which is reproduced here verbatim). For the
+     circular extension αc is applied consistently on both axes. */
+  const fc = circular || isZ ? (i.alphaC * i.fck) / i.gammaC : i.fck / i.gammaC
 
   const fyDesign = i.fy / i.gammaM0
   const fykDesign = i.fyk / i.gammaK
@@ -124,33 +127,76 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
      zone is taken from the bar position table.                                */
   const aTerm = 2 * fykDesign - 0.8 * fc
   const bTerm = 2 * fyDesign - 0.8 * fc
-  const numBase = 0.8 * s.Ac * fc - (isZ ? 0 : i.tw * (2 * i.tf - i.h) * bTerm)
-  const den = isZ ? 1.6 * i.bc * fc + 2 * i.tw * bTerm : 1.6 * i.hc * fc + 4 * i.tw * bTerm
+  const numBase = circular
+    ? 0.8 * s.Ac * fc
+    : 0.8 * s.Ac * fc - (isZ ? 0 : i.tw * (2 * i.tf - i.h) * bTerm)
+  /* denominator of the neutral-axis equation: the rate at which the plastic
+     block mobilises resistance per unit depth (the derivative of the block
+     force w.r.t. hn) plus the steel contribution of the reference expression */
+  const steelDen = (isZ ? 2 : 4) * i.tw * bTerm
+  const denRect = isZ ? 1.6 * i.bc * fc + steelDen : 1.6 * i.hc * fc + steelDen
   const numOf = (astc: number) => numBase - astc * aTerm
+  const denOf = (hn: number) => (circular ? 3.2 * fc * circleStripDerivative(i.diameter, hn) + steelDen : denRect)
 
-  const symbol = isZ
-    ? '[0.8 Ac αc fck/γc − Astc (2 fyk/γk − 0.8 αc fck/γc)] / [1.6 bc αc fck/γc + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)]'
-    : '[0.8 Ac fck/γc − Astc (2 fyk/γk − 0.8 fck/γc) − tw (2 tf − h) (2 fy/γm0 − 0.8 fck/γc)] / [1.6 hc fck/γc + 4 tw (2 fy/γm0 − 0.8 fck/γc)]'
+  /**
+   * Neutral-axis depth for a given Astc.
+   * - rectangular: closed form, exactly as in the reference workbook
+   * - circular: the block area is a transcendental function of hn, so solve
+   *   hn · den(hn) = num by bisection on [0, R];
+   *   returns R (with saturation) when no root exists inside the section.
+   */
+  const R = Math.max(i.diameter, 0) / 2
+  const solveHn = (astc: number): { hn: number; saturated: boolean } => {
+    if (!circular) return { hn: numOf(astc) / denRect, saturated: false }
+    const target = numOf(astc)
+    const g = (h: number) => h * denOf(h) - target
+    const lo = 0
+    const hi = R
+    if (g(hi) < 0) return { hn: hi, saturated: true }
+    if (g(lo) >= 0) return { hn: 0, saturated: true }
+    let a = lo
+    let b = hi
+    for (let k = 0; k < 60; k++) {
+      const m = (a + b) / 2
+      if (g(m) > 0) b = m
+      else a = m
+    }
+    return { hn: (a + b) / 2, saturated: false }
+  }
 
-  let astc = 2 * Astb
+  const symbol = circular
+    ? '[0.8 Ac αc fck/γc − Astc (2 fyk/γk − 0.8 αc fck/γc)] / [0.8 αc fck/γc · dAblock/dhn + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)] with Ablock(hn) the area of the circular strip |y| ≤ hn'
+    : isZ
+      ? '[0.8 Ac αc fck/γc − Astc (2 fyk/γk − 0.8 αc fck/γc)] / [1.6 bc αc fck/γc + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)]'
+      : '[0.8 Ac fck/γc − Astc (2 fyk/γk − 0.8 fck/γc) − tw (2 tf − h) (2 fy/γm0 − 0.8 fck/γc)] / [1.6 hc fck/γc + 4 tw (2 fy/γm0 − 0.8 fck/γc)]'
+
+  let astc = byPositions ? 0 : 2 * Astb
   let zprn = 0
-  let hnRaw = numOf(astc) / den
+  let solved = solveHn(astc)
+  let hnRaw = solved.hn
 
   if (byPositions) {
-    for (let k = 0; k < 12; k++) {
+    for (let k = 0; k < 24; k++) {
       const inside = band(hnRaw)
       const same = Math.abs(inside.area - astc) < 1e-9 && Math.abs(inside.zprn - zprn) < 1e-9
       astc = inside.area
       zprn = inside.zprn
-      hnRaw = numOf(astc) / den
-      if (same) break
+      solved = solveHn(astc)
+      const next = solved.hn
+      const converged = Math.abs(next - hnRaw) < 1e-7
+      hnRaw = next
+      if (same && converged) break
     }
   }
+  const saturated = solved.saturated
 
   const override = isZ ? i.hnZOverride : i.hnYOverride
   const step = isZ ? 0.5 : 0.1
   const hnOverridden = override !== null && Number.isFinite(override)
-  const hnAdopted = hnOverridden ? (override as number) : ceilTo(hnRaw, step)
+  /* the reference rounds the neutral-axis depth up to 0.5 / 0.1 mm; the
+     circular extension keeps the solved value (the rounding is a quirk of the
+     benchmark and has no meaning for a circle) */
+  const hnAdopted = hnOverridden ? (override as number) : circular ? hnRaw : ceilTo(hnRaw, step)
   const hn = hnOverridden ? (override as number) : hnRaw
 
   /* re-evaluate the reinforcement in the compression zone at the adopted depth */
@@ -168,18 +214,23 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
     : `(1.6 × ${n(i.hc, 0)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 4 × ${n(i.tw, 2)} × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
 
   const zpsn = isZ ? i.tw * hnAdopted ** 2 : 2 * i.tf * hnAdopted ** 2 + ((i.h - 2 * i.tf) * i.tw ** 2) / 4
-  const zpcn = (isZ ? i.bc : i.hc) * hnAdopted ** 2 - zpsn - zprn
+  const zpcn = circular
+    ? circleStripPlasticModulus(i.diameter, hnAdopted) - zpsn - zprn
+    : (isZ ? i.bc : i.hc) * hnAdopted ** 2 - zpsn - zprn
 
   const zps = isZ ? s.ZpsZ : s.ZpsY
   const zpc = isZ ? s.ZpcZ : s.ZpcY
   const zpr = isZ ? s.ZprZ : s.ZprY
 
   /* axial resistance at interaction point C */
+  /* axial resistance at interaction point C: the concrete compression block
+     (0.8 αc fck/γc over the 2hn block, or over the circular strip) plus the
+     steel inside it */
   const PdC = isZ
-    ? (1.6 * hnAdopted * i.bc * i.alphaC * i.fck) / i.gammaC / 1000 +
-      (4 * hnAdopted * i.tw * (fyDesign - (0.8 * i.fck) / i.gammaC)) / 1000
-    : (1.6 * hnAdopted * i.hc * i.fck) / i.gammaC / 1000 +
-      ((4 * hnAdopted * i.tf + i.tw * (i.h - 2 * i.tf)) * (fyDesign - (0.8 * i.fck) / i.gammaC)) / 1000
+    ? ((circular ? 0.8 * i.alphaC * i.fck / i.gammaC * circleStripArea(i.diameter, hnAdopted) : (1.6 * hnAdopted * i.bc * i.alphaC * i.fck) / i.gammaC) +
+        (4 * hnAdopted * i.tw * (fyDesign - (0.8 * i.fck) / i.gammaC))) / 1000
+    : ((circular ? 0.8 * i.alphaC * i.fck / i.gammaC * circleStripArea(i.diameter, hnAdopted) : (1.6 * hnAdopted * i.hc * i.fck) / i.gammaC) +
+        (4 * hnAdopted * i.tf + i.tw * (i.h - 2 * i.tf)) * (fyDesign - (0.8 * i.fck) / i.gammaC)) / 1000
 
   const Md =
     ((zps - zpsn) * fyDesign + (zpr - zprn) * fykDesign + 0.4 * i.alphaC * (zpc - zpcn) * (i.fck / i.gammaC)) / 1e6
@@ -188,7 +239,13 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
   /* neutral-axis assumption check */
   let naOk: boolean
   let naNote: string
-  if (isZ) {
+  if (circular) {
+    const webLimit = isZ ? i.h / 2 - i.tf : i.bf / 2
+    naOk = hnAdopted <= i.diameter / 2 && (isZ ? hnAdopted <= webLimit : hnAdopted < i.bf / 2 && hnAdopted > i.tw / 2)
+    naNote = saturated
+      ? `no equilibrium root exists inside the circle (hn would exceed R = ${n(i.diameter / 2, 1)} mm) — the compression block saturates at the full section`
+      : `hn,${symbolAxis} = ${n(hnAdopted, 1)} mm ≤ R = ${n(i.diameter / 2, 1)} mm and inside the web band (${isZ ? `${n(webLimit, 1)} = h/2 − tf` : `${n(i.tw / 2, 2)} … ${n(i.bf / 2, 1)}`}) → the neutral axis lies in the web`
+  } else if (isZ) {
     const limit = i.h / 2 - i.tf
     naOk = hnAdopted <= limit
     naNote = `hn,z = ${n(hnAdopted, 1)} ${naOk ? '≤' : '>'} ${n(limit, 1)} = h/2 − tf → the assumption that the neutral axis lies in the web is ${naOk ? 'valid' : 'NOT valid'}`
@@ -244,9 +301,21 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
       {
         id: `hnAdopted-${axis}`,
         symbol: `hn,${symbolAxis} (adopted)`,
-        label: hnOverridden ? 'neutral-axis depth adopted (user override)' : `neutral-axis depth adopted (rounded up to ${step})`,
-        formula: hnOverridden ? 'user override' : `⌈hn,${symbolAxis} / ${step}⌉ × ${step}`,
-        substitution: hnOverridden ? `= ${n(hnAdopted, 3)}` : `= ⌈${n(hnRaw, 3)} / ${step}⌉ × ${step}`,
+        label: hnOverridden
+          ? 'neutral-axis depth adopted (user override)'
+          : circular
+            ? 'neutral-axis depth (solved for the circular compression block)'
+            : `neutral-axis depth adopted (rounded up to ${step})`,
+        formula: hnOverridden
+          ? 'user override'
+          : circular
+            ? `solve hn · [0.8 αc fck/γc · dAblock/dhn + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)] = num`
+            : `⌈hn,${symbolAxis} / ${step}⌉ × ${step}`,
+        substitution: hnOverridden
+          ? `= ${n(hnAdopted, 3)}`
+          : circular
+            ? `= ${n(hnAdopted, 3)} (bisection, block area ${n(circleStripArea(i.diameter, hnAdopted), 0)} mm²)`
+            : `= ⌈${n(hnRaw, 3)} / ${step}⌉ × ${step}`,
         value: hnAdopted,
         unit: 'mm',
         decimals: isZ ? 1 : 1,
@@ -286,8 +355,12 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         id: `zpcn-${axis}`,
         symbol: 'Zpcn',
         label: 'plastic modulus of the concrete within 2hn',
-        formula: `${isZ ? 'bc' : 'hc'} hn² − Zpsn − Zprn`,
-        substitution: `= ${n(isZ ? i.bc : i.hc, 0)} × ${n(hnAdopted, 1)}² − ${n(zpsn, 0)} − ${n(zprn, 0)}`,
+        formula: circular
+          ? '(4/3)[R³ − (R² − hn²)^1.5] − Zpsn − Zprn'
+          : `${isZ ? 'bc' : 'hc'} hn² − Zpsn − Zprn`,
+        substitution: circular
+          ? `= (4/3) × [${n(R, 1)}³ − (${n(R, 1)}² − ${n(hnAdopted, 1)}²)^1.5] − ${n(zpsn, 0)} − ${n(zprn, 0)} = ${n(zpcn, 0)}`
+          : `= ${n(isZ ? i.bc : i.hc, 0)} × ${n(hnAdopted, 1)}² − ${n(zpsn, 0)} − ${n(zprn, 0)}`,
         value: zpcn,
         unit: 'mm³',
         decimals: 0,
@@ -298,10 +371,18 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         id: `PdC-${axis}`,
         symbol: "P'd,C",
         label: 'axial resistance at interaction point C',
-        formula: isZ
-          ? "1.6 hn,z bc αc fck/γc + 4 hn,z tw (fy/γm0 − 0.8 fck/γc)"
-          : "1.6 hn,y hc fck/γc + [4 hn,y tf + tw (h − 2 tf)] (fy/γm0 − 0.8 fck/γc)",
-        substitution: isZ
+        formula: circular
+          ? isZ
+            ? "0.8 αc fck/γc · Ablock(hn,z) + 4 hn,z tw (fy/γm0 − 0.8 fck/γc)"
+            : "0.8 αc fck/γc · Ablock(hn,y) + [4 hn,y tf + tw (h − 2 tf)] (fy/γm0 − 0.8 fck/γc)"
+          : isZ
+            ? "1.6 hn,z bc αc fck/γc + 4 hn,z tw (fy/γm0 − 0.8 fck/γc)"
+            : "1.6 hn,y hc fck/γc + [4 hn,y tf + tw (h − 2 tf)] (fy/γm0 − 0.8 fck/γc)",
+        substitution: circular
+          ? isZ
+            ? `= [0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} × ${n(circleStripArea(i.diameter, hnAdopted), 0)} + 4 × ${n(hnAdopted, 1)} × ${n(i.tw, 2)} × (${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)})] / 1000`
+            : `= [0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} × ${n(circleStripArea(i.diameter, hnAdopted), 0)} + (4 × ${n(hnAdopted, 1)} × ${n(i.tf, 2)} + ${n(i.tw, 2)} × (${n(i.h, 0)} − 2 × ${n(i.tf, 2)})) × (${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)})] / 1000`
+          : isZ
           ? `= [1.6 × ${n(hnAdopted, 1)} × ${n(i.bc, 0)} × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 4 × ${n(hnAdopted, 1)} × ${n(i.tw, 2)} × (${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)})] / 1000`
           : `= [1.6 × ${n(hnAdopted, 1)} × ${n(i.hc, 0)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + (4 × ${n(hnAdopted, 1)} × ${n(i.tf, 2)} + ${n(i.tw, 2)} × (${n(i.h, 0)} − 2 × ${n(i.tf, 2)})) × (${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)})] / 1000`,
         value: PdC,

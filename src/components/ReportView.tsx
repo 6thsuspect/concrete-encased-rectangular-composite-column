@@ -71,10 +71,23 @@ export function ReportView({
             ]}
           />
           <Table
-            caption={`Concrete section — ${inputs.sectionType === 'rect-slab' ? 'encasement + slab' : 'rectangular encasement'}`}
+            caption={`Concrete section — ${
+              inputs.sectionType === 'rect-slab'
+                ? 'encasement + slab'
+                : inputs.sectionType === 'circular'
+                  ? 'circular encasement'
+                  : 'rectangular encasement'
+            }`}
             rows={[
-              ['bc', fmt(inputs.bc, 0), 'mm'],
-              ['hc', fmt(inputs.hc, 0), 'mm'],
+              ...(inputs.sectionType === 'circular'
+                ? ([
+                    ['D', fmt(inputs.diameter, 0), 'mm'],
+                    ['R', fmt(inputs.diameter / 2, 0), 'mm'],
+                  ] as [string, string, string][])
+                : ([
+                    ['bc', fmt(inputs.bc, 0), 'mm'],
+                    ['hc', fmt(inputs.hc, 0), 'mm'],
+                  ] as [string, string, string][])),
               ['cover', fmt(inputs.cover, 0), 'mm'],
               ...(inputs.sectionType === 'rect-slab'
                 ? ([
@@ -134,7 +147,9 @@ export function ReportView({
                     `${row.count} × ⌀${fmt(row.db, 0)} mm ` +
                       (row.spread === 'corner'
                         ? `at (±${fmt(row.x, 0)}, ±${fmt(row.y, 0)})`
-                        : `at (${fmt(row.x, 0)}, ${fmt(row.y, 0)})`) +
+                        : row.spread === 'ring'
+                          ? `on a ring of ⌀${fmt(2 * Math.abs(row.x), 0)} mm from ${fmt(row.y, 0)}°`
+                          : `at (${fmt(row.x, 0)}, ${fmt(row.y, 0)})`) +
                       `${row.layer ? ` · layer ${row.layer}` : ''}${row.cover ? ` · cover ${fmt(row.cover, 0)} mm` : ''}`,
                     '',
                   ] as [string, string, string])

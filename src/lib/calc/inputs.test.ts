@@ -33,11 +33,19 @@ import {
   barInstances,
   barsInBand,
   barsSummary,
+  circleArea,
+  circleInertia,
+  circlePlasticModulus,
+  circleStripArea,
+  circleStripDerivative,
+  circleStripPlasticModulus,
   concreteGeometry,
   minBarSpacing,
+  steelCornerRadius,
 } from './geometry'
 import type { BarRow, Inputs } from '../types'
 import { decodeInputs, encodeInputs } from '../share'
+import { designRing } from '../design'
 import { inputsFromJson, inputsToJson } from '../inputIO'
 
 const ref = computeAll(DEFAULT_INPUTS)
@@ -311,6 +319,237 @@ describe('compression-zone reinforcement model', () => {
     expect(res.axes.z.zprn).toBe(0)
     expect(res.axes.z.astc).toBeCloseTo(2 * barArea(12), 4)
     expect(positions.axes.z.Md).not.toBeCloseTo(res.axes.z.Md, 3)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Circular encasement                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Numerical integration of the circular strip |y| ≤ hn (trapezoid rule). */
+function numericStrip(D: number, hn: number, steps = 200000) {
+  const r = D / 2
+  const x = Math.min(Math.max(hn, 0), r)
+  const dy = x / steps
+  let area = 0
+  let firstMoment = 0
+  for (let k = 0; k <= steps; k++) {
+    const y = k * dy
+    const w = 2 * Math.sqrt(Math.max(r * r - y * y, 0))
+    const wgt = k === 0 || k === steps ? 0.5 : 1
+    area += wgt * w * dy
+    firstMoment += wgt * y * w * dy
+  }
+  return { area: 2 * area, firstMoment: 2 * firstMoment }
+}
+
+const circle: Inputs = {
+  ...cloneInputs(DEFAULT_INPUTS),
+  sectionType: 'circular',
+  diameter: 600,
+  cover: 50,
+  bars: [{ id: 'ring-1', label: 'B1', db: 25, count: 12, layer: '1', cover: 50, x: 250, y: 0, spread: 'ring' }],
+  astcModel: 'positions',
+}
+
+describe('circular outline', () => {
+  it('reproduces the closed forms of a circle by numeric integration', () => {
+    const D = 600
+    const R = D / 2
+    expect(circleArea(D)).toBeCloseTo(Math.PI * R * R, 6)
+    expect(circleInertia(D)).toBeCloseTo((Math.PI * D ** 4) / 64, 6)
+    expect(circlePlasticModulus(D)).toBeCloseTo((4 * R ** 3) / 3, 6)
+
+    for (const hn of [10, 37.57, 120, 250, 300, 400]) {
+      const num = numericStrip(D, hn)
+      expect(circleStripArea(D, hn)).toBeCloseTo(num.area, 1)
+      expect(circleStripPlasticModulus(D, hn)).toBeCloseTo(num.firstMoment, 0)
+    }
+    expect(circleStripArea(D, R)).toBeCloseTo(circleArea(D), 4)
+    expect(circleStripPlasticModulus(D, R)).toBeCloseTo(circlePlasticModulus(D), 4)
+    expect(circleStripArea(D, 0)).toBe(0)
+    // the derivative is the total width of the strip at hn: 2·2√(R² − hn²)
+    expect(circleStripDerivative(D, 100)).toBeCloseTo(4 * Math.sqrt(R * R - 100 * 100), 9)
+    expect(circleStripDerivative(D, R + 50)).toBe(0)
+  })
+
+  it('distributes the peripheral bars evenly on the ring', () => {
+    const bars = barInstances(circle.bars)
+    expect(bars).toHaveLength(12)
+    for (const b of bars) expect(Math.hypot(b.x, b.y)).toBeCloseTo(250, 6)
+    // twelve bars at 30° starting from +z
+    const near = (x: number, y: number) => bars.some((b) => Math.abs(b.x - x) < 1e-6 && Math.abs(b.y - y) < 1e-6)
+    expect(near(250, 0)).toBe(true)
+    expect(near(0, 250)).toBe(true)
+    expect(near(-250, 0)).toBe(true)
+    // the ring closes: the spacing along the ring is 2πρ/n
+    expect(minBarSpacing(bars)).toBeCloseTo(2 * 250 * Math.sin(Math.PI / 12), 6)
+
+    // a start angle rotates the whole cage
+    const rotated = barInstances([{ ...circle.bars[0], y: 90 }])
+    expect(rotated[0].x).toBeCloseTo(0, 6)
+    expect(rotated[0].y).toBeCloseTo(250, 6)
+  })
+
+  it('derives the concrete properties of the circle', () => {
+    const r = computeAll(circle)
+    const steel = computeAll(DEFAULT_INPUTS).steel
+    const bars = barsSummary(circle.bars)
+    expect(r.concrete.Ac).toBeCloseTo(circleArea(600) - steel.As - bars.Ast, 6)
+    expect(r.concrete.IcZ).toBeCloseTo(circleInertia(600) - steel.IsZ - bars.IstZ, 6)
+    expect(r.concrete.IcY).toBeCloseTo(circleInertia(600) - steel.IsY - bars.IstY, 6)
+    expect(r.concrete.ZpcZ).toBeCloseTo(circlePlasticModulus(600) - steel.ZpsZ - bars.ZprZ, 6)
+    expect(r.concrete.ZpcY).toBeCloseTo(circlePlasticModulus(600) - steel.ZpsY - bars.ZprY, 6)
+    expect(r.concrete.Aslab).toBe(0)
+    expect(r.concrete.diameter).toBe(600)
+    // Zpr,z of an even cage: Σ A ρ |sin φ| = A ρ Σ|sin| over the twelve angles
+    const sumSin = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].reduce(
+      (a, deg) => a + Math.abs(Math.sin((deg * Math.PI) / 180)),
+      0,
+    )
+    expect(r.bars.ZprZ).toBeCloseTo(bars.Ast / 12 * 250 * sumSin, 3)
+  })
+
+  it('solves the neutral axis of the circular compression block', () => {
+    const r = computeAll(circle)
+    const z = r.axes.z
+    const y = r.axes.y
+    expect(z.hn).toBeGreaterThan(0)
+    expect(z.hn).toBeLessThan(300)
+    expect(z.hnAdopted).toBeCloseTo(z.hn, 9) // no rounding for a circle
+    // the equilibrium equation holds at the solved depth
+    const fc = (DEFAULT_INPUTS.alphaC * DEFAULT_INPUTS.fck) / DEFAULT_INPUTS.gammaC
+    const num = 0.8 * r.concrete.Ac * fc - z.astc * ((2 * DEFAULT_INPUTS.fyk) / DEFAULT_INPUTS.gammaK - 0.8 * fc)
+    const den =
+      3.2 * fc * circleStripDerivative(600, z.hnAdopted) +
+      2 * DEFAULT_INPUTS.tw * ((2 * DEFAULT_INPUTS.fy) / DEFAULT_INPUTS.gammaM0 - 0.8 * fc)
+    expect(z.hnAdopted * den).toBeCloseTo(num, 2)
+    // the block is the circular strip, the plastic modulus its first moment
+    expect(z.astc).toBeCloseTo(barsInBand(r.bars.instances, 'z', z.hnAdopted).area, 6)
+    expect(z.zpcn).toBeCloseTo(circleStripPlasticModulus(600, z.hnAdopted) - z.zpsn - z.zprn, 6)
+    expect(z.PdC).toBeGreaterThan(0)
+    expect(z.Mmax).toBeGreaterThan(z.Md)
+    // the minor axis has the same concrete block but a different steel term
+    expect(y.hnAdopted).not.toBeCloseTo(z.hnAdopted, 3)
+    expect(Number.isFinite(r.dc.total)).toBe(true)
+  })
+
+  it('increases the resistance when the peripheral steel increases', () => {
+    const lean = computeAll({ ...circle, bars: [{ ...circle.bars[0], db: 16, count: 8 }] })
+    const rich = computeAll({ ...circle, bars: [{ ...circle.bars[0], db: 32, count: 16 }] })
+    expect(rich.bars.Ast).toBeGreaterThan(lean.bars.Ast)
+    expect(rich.axes.z.Mmax).toBeGreaterThan(lean.axes.z.Mmax)
+    expect(rich.axes.z.Md).toBeGreaterThan(lean.axes.z.Md)
+    expect(rich.dc.ratioZ).toBeLessThan(lean.dc.ratioZ)
+    expect(rich.dc.ratioY).toBeLessThan(lean.dc.ratioY)
+    expect(rich.dc.total).toBeLessThan(lean.dc.total)
+  })
+
+  it('adds the circular detailing checks to the section group', () => {
+    const r = computeAll(circle)
+    const ids = r.groups.flatMap((g) => g.steps.map((s) => s.id))
+    for (const id of ['circ-bars', 'circ-db', 'circ-ratio', 'circ-pitch']) expect(ids).toContain(id)
+    const barsStep = r.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-bars')
+    expect(barsStep?.status).toBe('ok') // 12 bars ≥ 6
+    const ratio = r.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-ratio')
+    expect(ratio?.value).toBeCloseTo((r.bars.Ast / circleArea(600)) * 100, 6)
+    expect(ratio?.status).toBe('ok') // 2.08 % between 0.8 % and 6 %
+    const pitch = r.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-pitch')
+    expect(pitch?.value).toBeCloseTo((2 * Math.PI * 250) / 12, 6) // 130.9 mm
+
+    const four = computeAll({ ...circle, bars: [{ ...circle.bars[0], count: 8 }] })
+    expect(four.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-bars')?.status).toBe('ok')
+    const sixBar = computeAll({ ...circle, bars: [{ ...circle.bars[0], count: 6, db: 25, x: 250 }] })
+    expect(sixBar.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-bars')?.status).toBe('ok')
+    expect(sixBar.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-pitch')?.status).toBe('ok')
+    const wide = computeAll({ ...circle, bars: [{ ...circle.bars[0], count: 6, x: 288 }] })
+    expect(wide.groups.flatMap((g) => g.steps).find((s) => s.id === 'circ-pitch')?.status).toBe('warn')
+  })
+
+  it('validates the circular inputs', () => {
+    const msgs = (i: Inputs) => inputProblems(i).map((p) => p.message).join(' | ')
+    expect(inputProblems(circle)).toEqual([])
+    expect(msgs({ ...circle, diameter: 300 })).toMatch(/does not fit inside the circle/)
+    expect(msgs({ ...circle, cover: 320 })).toMatch(/cover must be smaller than the radius/)
+    expect(msgs({ ...circle, bars: [{ ...circle.bars[0], count: 4 }] })).toMatch(/at least 6 bars/)
+    expect(msgs({ ...circle, bars: [{ ...circle.bars[0], x: 295 }] })).toMatch(/places the bars outside/)
+    expect(msgs({ ...circle, bars: [{ ...circle.bars[0], cover: 10 }] })).toMatch(/implies a cover of 50 mm/)
+    expect(msgs({ ...circle, bars: [{ ...circle.bars[0], count: 6, x: 288 }] })).toMatch(/pitch of the peripheral bars is 302/)
+    expect(msgs({ ...circle, bars: [{ ...circle.bars[0], count: 24, x: 280 }] })).toMatch(/pitch of the peripheral bars is 73/)
+    expect(
+      msgs({ ...DEFAULT_INPUTS, bars: [{ ...DEFAULT_INPUTS.bars[0], spread: 'ring', x: 150 }] }),
+    ).toMatch(/only meaningful for a circular section/)
+    expect(msgs({ ...circle, bars: [] })).toMatch(/At least one reinforcement row/)
+    expect(steelCornerRadius(circle)).toBeCloseTo(Math.hypot(128, 130), 6)
+    expect(steelCornerRadius(circle)).toBeLessThan(300)
+  })
+
+  it('converts ring rows through a save / load cycle', () => {
+    const back = inputsFromJson(inputsToJson(circle))
+    expect(back?.bars[0]).toEqual(circle.bars[0])
+    expect(back?.diameter).toBe(600)
+    expect(computeAll(back as Inputs).dc.total).toBeCloseTo(computeAll(circle).dc.total, 6)
+    expect(decodeInputs(encodeInputs(circle))?.bars[0].spread).toBe('ring')
+  })
+})
+
+describe('design of the peripheral reinforcement', () => {
+  it('finds the required steel of the circular section', () => {
+    const design = designRing(circle, 1.0)
+    expect(design).not.toBeNull()
+    const d = design as NonNullable<typeof design>
+    expect(d.rho).toBeCloseTo(250, 6)
+    expect(d.ag).toBeCloseTo(circleArea(600), 6)
+    expect(d.minAst).toBeCloseTo(0.008 * d.ag, 6)
+    expect(d.maxAst).toBeCloseTo(0.06 * d.ag, 6)
+    // the reference cage is already adequate, so no extra steel is required
+    expect(d.satisfied).toBe(true)
+    expect(d.requiredAst).toBeLessThan(d.minAst)
+    expect(d.candidates.length).toBeGreaterThan(5)
+    const recommended = d.candidates.find((c) => c.recommended)
+    expect(recommended).toBeDefined()
+    expect(recommended?.ok).toBe(true)
+    expect(recommended?.dc).toBeLessThanOrEqual(1)
+    expect(recommended?.n).toBeGreaterThanOrEqual(6)
+    expect(recommended?.ratio).toBeGreaterThanOrEqual(0.8)
+  })
+
+  it('designs heavier loads and respects the 6 % ceiling', () => {
+    // a load level the ⌀600 reference cage cannot take but a 6 % cage can
+    const heavy: Inputs = { ...cloneInputs(circle), PD: 3000, PL: 1400, Mz: 800, My: 150 }
+    expect(computeAll(heavy).dc.total).toBeGreaterThan(1)
+    const design = designRing(heavy, 1.0) as NonNullable<ReturnType<typeof designRing>>
+    expect(design.satisfied).toBe(false)
+    expect(design.feasible).toBe(true)
+    expect(design.requiredAst).toBeGreaterThan(design.minAst)
+    expect(design.requiredAst).toBeLessThan(design.maxAst)
+
+    const recommended = design.candidates.find((c) => c.recommended)
+    expect(recommended).toBeDefined()
+    expect(recommended?.ok).toBe(true)
+    expect(recommended?.dc).toBeLessThanOrEqual(1)
+    expect(recommended?.ast).toBeGreaterThanOrEqual(design.requiredAst)
+    expect(recommended?.ast).toBeLessThanOrEqual(design.maxAst + 1e-6)
+
+    // applying the recommended row really does satisfy the target
+    const applied = computeAll({
+      ...heavy,
+      bars: [{ ...circle.bars[0], db: recommended?.db ?? 25, count: recommended?.n ?? 12 }],
+    })
+    expect(applied.dc.total).toBeLessThanOrEqual(1)
+
+    // an extreme load cannot be reached even with the 6 % maximum
+    const extreme: Inputs = { ...cloneInputs(circle), PD: 6000, PL: 3000, Mz: 1800, My: 300 }
+    const hopeless = designRing(extreme, 1.0) as NonNullable<ReturnType<typeof designRing>>
+    expect(hopeless.satisfied).toBe(false)
+    expect(hopeless.feasible).toBe(false)
+    expect(Number.isNaN(hopeless.requiredAst)).toBe(true)
+    expect(hopeless.candidates.every((c) => !c.recommended)).toBe(true)
+  })
+
+  it('returns null for a rectangular section or without a ring row', () => {
+    expect(designRing(DEFAULT_INPUTS, 1)).toBeNull()
+    expect(designRing({ ...circle, bars: [{ ...DEFAULT_INPUTS.bars[0] }] }, 1)).toBeNull()
   })
 })
 
