@@ -2,6 +2,7 @@ import type { Axis, AxisResult, Inputs, Point, StepGroup } from '../types'
 import { fmt } from '../format'
 import type { SectionProps } from './section'
 import type { MemberResult } from './member'
+import { barsInBand } from './geometry'
 
 const n = fmt
 
@@ -101,7 +102,13 @@ export function bilinearCurve(A: Point, B: Point, per = 48): Point[] {
 export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Axis): AxisCalc {
   const isZ = axis === 'z'
   const symbolAxis = isZ ? 'z' : 'y'
-  const Astc = 2 * s.Astb
+
+  /* Reinforcement assumed to act in the compression zone.
+     'reference'  → two corner bars (the benchmark assumption, Astc = 2 Ast,b)
+     'positions'  → every bar whose distance from the axis is inside 2 hn      */
+  const byPositions = i.astcModel === 'positions'
+  const Astb = s.bars.count > 0 ? s.bars.Ast / s.bars.count : 0
+  const band = (hn: number) => barsInBand(s.bars.instances, axis, hn)
 
   /* Effective concrete stress-block strength used by the reference.
      The z-axis expressions carry αc; the published y-axis expressions do not
@@ -111,30 +118,33 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
   const fyDesign = i.fy / i.gammaM0
   const fykDesign = i.fyk / i.gammaK
 
-  let hnRaw: number
-  let numTxt: string
-  let denTxt: string
-  let symbol: string
+  /* Neutral-axis depth from plastic-block equilibrium.
+     Only the numerator depends on Astc, so the two are solved together with a
+     small fixed-point iteration when the reinforcement inside the compression
+     zone is taken from the bar position table.                                */
+  const aTerm = 2 * fykDesign - 0.8 * fc
+  const bTerm = 2 * fyDesign - 0.8 * fc
+  const numBase = 0.8 * s.Ac * fc - (isZ ? 0 : i.tw * (2 * i.tf - i.h) * bTerm)
+  const den = isZ ? 1.6 * i.bc * fc + 2 * i.tw * bTerm : 1.6 * i.hc * fc + 4 * i.tw * bTerm
+  const numOf = (astc: number) => numBase - astc * aTerm
 
-  if (isZ) {
-    const num = 0.8 * s.Ac * fc - Astc * (2 * fykDesign - 0.8 * fc)
-    const den = 1.6 * i.bc * fc + 2 * i.tw * (2 * fyDesign - 0.8 * fc)
-    hnRaw = num / den
-    symbol =
-      '[0.8 Ac αc fck/γc − Astc (2 fyk/γk − 0.8 αc fck/γc)] / [1.6 bc αc fck/γc + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)]'
-    numTxt = `(0.8 × ${n(s.Ac, 2)} × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} − ${n(Astc, 2)} × (2 × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} − 0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
-    denTxt = `(1.6 × ${n(i.bc, 0)} × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 2 × ${n(i.tw, 2)} × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
-  } else {
-    const num =
-      0.8 * s.Ac * fc -
-      Astc * (2 * fykDesign - 0.8 * fc) -
-      i.tw * (2 * i.tf - i.h) * (2 * fyDesign - 0.8 * fc)
-    const den = 1.6 * i.hc * fc + 4 * i.tw * (2 * fyDesign - 0.8 * fc)
-    hnRaw = num / den
-    symbol =
-      '[0.8 Ac fck/γc − Astc (2 fyk/γk − 0.8 fck/γc) − tw (2 tf − h) (2 fy/γm0 − 0.8 fck/γc)] / [1.6 hc fck/γc + 4 tw (2 fy/γm0 − 0.8 fck/γc)]'
-    numTxt = `(0.8 × ${n(s.Ac, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} − ${n(Astc, 2)} × (2 × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}) − ${n(i.tw, 2)} × (2 × ${n(i.tf, 2)} − ${n(i.h, 0)}) × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
-    denTxt = `(1.6 × ${n(i.hc, 0)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 4 × ${n(i.tw, 2)} × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
+  const symbol = isZ
+    ? '[0.8 Ac αc fck/γc − Astc (2 fyk/γk − 0.8 αc fck/γc)] / [1.6 bc αc fck/γc + 2 tw (2 fy/γm0 − 0.8 αc fck/γc)]'
+    : '[0.8 Ac fck/γc − Astc (2 fyk/γk − 0.8 fck/γc) − tw (2 tf − h) (2 fy/γm0 − 0.8 fck/γc)] / [1.6 hc fck/γc + 4 tw (2 fy/γm0 − 0.8 fck/γc)]'
+
+  let astc = 2 * Astb
+  let zprn = 0
+  let hnRaw = numOf(astc) / den
+
+  if (byPositions) {
+    for (let k = 0; k < 12; k++) {
+      const inside = band(hnRaw)
+      const same = Math.abs(inside.area - astc) < 1e-9 && Math.abs(inside.zprn - zprn) < 1e-9
+      astc = inside.area
+      zprn = inside.zprn
+      hnRaw = numOf(astc) / den
+      if (same) break
+    }
   }
 
   const override = isZ ? i.hnZOverride : i.hnYOverride
@@ -143,13 +153,26 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
   const hnAdopted = hnOverridden ? (override as number) : ceilTo(hnRaw, step)
   const hn = hnOverridden ? (override as number) : hnRaw
 
-  /* plastic moduli of the parts within 2 hn of the neutral axis */
-  const zprn = 0
+  /* re-evaluate the reinforcement in the compression zone at the adopted depth */
+  if (byPositions) {
+    const inside = band(hnAdopted)
+    astc = inside.area
+    zprn = inside.zprn
+  }
+
+  const numTxt = isZ
+    ? `(0.8 × ${n(s.Ac, 2)} × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} − ${n(astc, 2)} × (2 × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} − 0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
+    : `(0.8 × ${n(s.Ac, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} − ${n(astc, 2)} × (2 × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}) − ${n(i.tw, 2)} × (2 × ${n(i.tf, 2)} − ${n(i.h, 0)}) × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
+  const denTxt = isZ
+    ? `(1.6 × ${n(i.bc, 0)} × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 2 × ${n(i.tw, 2)} × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.alphaC, 2)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
+    : `(1.6 × ${n(i.hc, 0)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)} + 4 × ${n(i.tw, 2)} × (2 × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} − 0.8 × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}))`
+
   const zpsn = isZ ? i.tw * hnAdopted ** 2 : 2 * i.tf * hnAdopted ** 2 + ((i.h - 2 * i.tf) * i.tw ** 2) / 4
-  const zpcn = (isZ ? i.bc : i.hc) * hnAdopted ** 2 - zpsn
+  const zpcn = (isZ ? i.bc : i.hc) * hnAdopted ** 2 - zpsn - zprn
 
   const zps = isZ ? s.ZpsZ : s.ZpsY
   const zpc = isZ ? s.ZpcZ : s.ZpcY
+  const zpr = isZ ? s.ZprZ : s.ZprY
 
   /* axial resistance at interaction point C */
   const PdC = isZ
@@ -159,8 +182,8 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
       ((4 * hnAdopted * i.tf + i.tw * (i.h - 2 * i.tf)) * (fyDesign - (0.8 * i.fck) / i.gammaC)) / 1000
 
   const Md =
-    ((zps - zpsn) * fyDesign + (s.ZprZ - zprn) * fykDesign + 0.4 * i.alphaC * (zpc - zpcn) * (i.fck / i.gammaC)) / 1e6
-  const Mmax = (zps * fyDesign + s.ZprZ * fykDesign + 0.4 * i.alphaC * zpc * (i.fck / i.gammaC)) / 1e6
+    ((zps - zpsn) * fyDesign + (zpr - zprn) * fykDesign + 0.4 * i.alphaC * (zpc - zpcn) * (i.fck / i.gammaC)) / 1e6
+  const Mmax = (zps * fyDesign + zpr * fykDesign + 0.4 * i.alphaC * zpc * (i.fck / i.gammaC)) / 1e6
 
   /* neutral-axis assumption check */
   let naOk: boolean
@@ -196,9 +219,11 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         id: `astc-${axis}`,
         symbol: 'Astc',
         label: 'reinforcement area within the compression zone',
-        formula: 'Astc = 2 × Ast,b (two corner bars)',
-        substitution: `= 2 × ${n(s.Astb, 2)}`,
-        value: Astc,
+        formula: byPositions ? 'Astc = Σ Ast,i for |eᵢ| ≤ hn' : 'Astc = 2 × Ast,b (two corner bars)',
+        substitution: byPositions
+          ? `= Σ Ast,i for bars within 2 × ${n(hnAdopted, 1)} mm of the ${symbolAxis}-axis = ${n(astc, 2)}`
+          : `= 2 × ${n(Astb, 2)}`,
+        value: astc,
         unit: 'mm²',
         decimals: 2,
         ref: `4.z-Buckling!E31`,
@@ -233,8 +258,10 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         id: `zprn-${axis}`,
         symbol: 'Zprn',
         label: 'plastic modulus of reinforcement within 2hn',
-        formula: 'Σ Ast,i eᵢ (no bar layer inside the 2hn region)',
-        substitution: '= 0',
+        formula: 'Zprn = Σ Ast,i |eᵢ| for |eᵢ| ≤ hn',
+        substitution: byPositions
+          ? `= ${n(zprn, 1)} (bars inside the 2 × ${n(hnAdopted, 1)} mm band)`
+          : '= 0 (no bar layer inside the 2hn region)',
         value: zprn,
         unit: 'mm³',
         decimals: 0,
@@ -259,8 +286,8 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         id: `zpcn-${axis}`,
         symbol: 'Zpcn',
         label: 'plastic modulus of the concrete within 2hn',
-        formula: `${isZ ? 'bc' : 'hc'} hn² − Zpsn`,
-        substitution: `= ${n(isZ ? i.bc : i.hc, 0)} × ${n(hnAdopted, 1)}² − ${n(zpsn, 0)}`,
+        formula: `${isZ ? 'bc' : 'hc'} hn² − Zpsn − Zprn`,
+        substitution: `= ${n(isZ ? i.bc : i.hc, 0)} × ${n(hnAdopted, 1)}² − ${n(zpsn, 0)} − ${n(zprn, 0)}`,
         value: zpcn,
         unit: 'mm³',
         decimals: 0,
@@ -288,7 +315,7 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         symbol: 'Md',
         label: 'design moment resistance (interaction points B/C)',
         formula: `(Zps,${symbolAxis} − Zpsn) fy/γm0 + (Zpr − Zprn) fyk/γk + 0.4 αc (Zpc,${symbolAxis} − Zpcn) fck/γc`,
-        substitution: `= [(${n(zps, 1)} − ${n(zpsn, 0)}) × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} + (${n(s.ZprZ, 1)} − ${n(zprn, 0)}) × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} + 0.4 × ${n(i.alphaC, 2)} × (${n(zpc, 1)} − ${n(zpcn, 0)}) × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}] / 10⁶`,
+        substitution: `= [(${n(zps, 1)} − ${n(zpsn, 0)}) × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} + (${n(zpr, 1)} − ${n(zprn, 0)}) × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} + 0.4 × ${n(i.alphaC, 2)} × (${n(zpc, 1)} − ${n(zpcn, 0)}) × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}] / 10⁶`,
         value: Md,
         unit: 'kN-m',
         decimals: 3,
@@ -300,7 +327,7 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
         symbol: 'Mmax',
         label: 'maximum moment resistance (interaction point D)',
         formula: `Zps,${symbolAxis} fy/γm0 + Zpr fyk/γk + 0.4 αc Zpc,${symbolAxis} fck/γc`,
-        substitution: `= [${n(zps, 1)} × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} + ${n(s.ZprZ, 1)} × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} + 0.4 × ${n(i.alphaC, 2)} × ${n(zpc, 1)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}] / 10⁶`,
+        substitution: `= [${n(zps, 1)} × ${n(i.fy, 0)} / ${n(i.gammaM0, 2)} + ${n(zpr, 1)} × ${n(i.fyk, 0)} / ${n(i.gammaK, 2)} + 0.4 × ${n(i.alphaC, 2)} × ${n(zpc, 1)} × ${n(i.fck, 0)} / ${n(i.gammaC, 2)}] / 10⁶`,
         value: Mmax,
         unit: 'kN-m',
         decimals: 3,
@@ -324,7 +351,7 @@ export function axisCalc(i: Inputs, s: SectionProps, mem: MemberResult, axis: Ax
     hn,
     hnAdopted,
     hnOverridden,
-    astc: Astc,
+    astc,
     zprn,
     zpsn,
     zpcn,

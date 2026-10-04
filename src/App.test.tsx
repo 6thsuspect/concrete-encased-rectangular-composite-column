@@ -47,6 +47,26 @@ function clickButton(label: string) {
   return click(partial, `button containing "${label}"`)
 }
 
+function field(name: string): HTMLInputElement {
+  const el = container.querySelector(`[data-field="${name}"]`)
+  if (!el) throw new Error(`field ${name} not found`)
+  return el as HTMLInputElement
+}
+
+function selectOf(label: string): HTMLSelectElement {
+  const el = container.querySelector(`select[aria-label="${label}"]`)
+  if (!el) throw new Error(`select ${label} not found`)
+  return el as HTMLSelectElement
+}
+
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+  act(() => {
+    setter?.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   act(() => {
@@ -85,12 +105,10 @@ describe('application shell', () => {
   })
 
   it('recalculates as soon as an input changes', () => {
-    const sidebar = container.querySelector('aside')
-    const pd = sidebar?.querySelector('input[type="text"]') as HTMLInputElement | null
-    expect(pd).toBeTruthy()
-    expect(pd?.value).toBe('1200')
+    const pd = field('PD')
+    expect(pd.value).toBe('1200')
 
-    setInputValue(pd as HTMLInputElement, '2000')
+    setInputValue(pd, '2000')
     // P at mid-height becomes 2,000 + 600 kN and the ratios change accordingly
     expect(text()).toContain('2,600')
     expect(text()).not.toContain('1,800.0 / (0.761')
@@ -109,10 +127,61 @@ describe('application shell', () => {
   })
 
   it('rejects an invalid entry without breaking the results', () => {
-    const sidebar = container.querySelector('aside')
-    const bc = Array.from(sidebar?.querySelectorAll('input[type="text"]') ?? [])[4] as HTMLInputElement
-    setInputValue(bc, 'abc')
+    setInputValue(field('bc'), 'abc')
     expect(text()).toContain('Invalid value')
     expect(text()).toContain('D/C')
+  })
+
+  it('auto-fills the concrete grade and marks manual values as customised', () => {
+    // the hint text of the materials fieldset mentions the word once
+    const badges = () => (text().match(/customised/g) ?? []).length
+    const baseline = badges()
+    setSelectValue(selectOf('Concrete grade'), 'M40')
+    expect(field('fck').value).toBe('40')
+    expect(field('Ecm').value).toBe('31623')
+
+    expect(badges()).toBe(baseline)
+    setInputValue(field('fck'), '42')
+    expect(badges()).toBe(baseline + 1)
+    expect(field('fck').value).toBe('42')
+  })
+
+  it('stops the calculation while the inputs contain a blocking error', () => {
+    // cover larger than half the smallest concrete dimension
+    setInputValue(field('c'), '300')
+    expect(text()).toContain('Calculation stopped')
+    expect(text()).toContain('The cover must be smaller than half of the smallest concrete dimension.')
+    expect(text()).toContain('check inputs')
+    expect(text()).not.toContain('Demand / capacity')
+
+    // switching to a valid cover brings the results back
+    setInputValue(field('c'), '41')
+    expect(text()).toContain('Demand / capacity')
+    expect(text()).toContain('1.381')
+  })
+
+  it('switches the concrete section type and reveals the slab inputs', () => {
+    expect(container.querySelector('[data-field="bs"]')).toBeNull()
+    clickButton('Encasement + slab')
+    expect(field('bs').value).toBe('1000')
+    expect(field('ts').value).toBe('150')
+    expect(text()).toContain('slab 1,000 × 150')
+    // the slab raises the moment resistance, so the D/C ratio drops
+    expect(text()).toContain('0.857')
+
+    clickButton('Rectangular encasement')
+    expect(text()).toContain('1.381')
+  })
+
+  it('adds and removes reinforcement rows through the table', () => {
+    expect(text()).toContain('Ast = 452.4')
+    clickButton('Add row')
+    expect(text()).toContain('Ast = 904.8')
+    // both rows are corner rows of four ⌀12 bars
+    expect(container.querySelectorAll('[aria-label^="X of row"]').length).toBe(2)
+
+    const del = container.querySelector('[aria-label="Delete row B2"]') as HTMLButtonElement | null
+    click(del, 'delete row B2')
+    expect(text()).toContain('Ast = 452.4')
   })
 })

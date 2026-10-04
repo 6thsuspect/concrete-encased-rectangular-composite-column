@@ -3,7 +3,7 @@
  * rectangular composite column (CSI CCD Example 001).
  *
  * Units used throughout the engine (and the UI):
- *   lengths              mm            (member lengths also entered in mm)
+ *   lengths              mm            (member lengths also entered in mm/m)
  *   areas / inertias     mm^2 / mm^4 / mm^3
  *   stresses / moduli    N/mm^2
  *   forces               kN
@@ -11,32 +11,93 @@
  *   distributed stiffness kN-m^2  ((EI)e,z, (EI)e,y)
  */
 
+/* ------------------------------------------------------------------ */
+/* Cross-section description                                           */
+/* ------------------------------------------------------------------ */
+
+/** Encasement type: plain rectangular, optionally with an integral slab. */
+export type SectionType = 'rect' | 'rect-slab'
+
+/** How the bars of one table row are arranged around its (X, Y) position. */
+export type BarSpread = 'corner' | 'point'
+
+/** One row of the reinforcement position table. */
+export interface BarRow {
+  /** stable identifier used by the UI and the exports */
+  id: string
+  /** user label, e.g. "B1" */
+  label: string
+  /** bar diameter, mm */
+  db: number
+  /** number of bars in this row (4 for a "corner" cage) */
+  count: number
+  /** layer / group tag, e.g. "1", "Top", "Face A" */
+  layer: string
+  /** effective cover: concrete face to bar centre, mm */
+  cover: number
+  /** bar centre (or corner offset) from the section centroid along z, mm */
+  x: number
+  /** bar centre (or corner offset) from the section centroid along y, mm */
+  y: number
+  /**
+   * `corner` → four bars at (±X, ±Y) (count must be 4)
+   * `point`  → `count` bars stacked at (X, Y)
+   */
+  spread: BarSpread
+}
+
+/** Unit selection for the input/output presentation. */
+export interface UnitSettings {
+  /** unit used for the member lengths Ly / Lz */
+  length: 'mm' | 'm'
+  /** label used for all stresses and moduli (identical quantity) */
+  stress: 'N/mm²' | 'MPa'
+}
+
+/** How the reinforcement area inside the 2hn band is determined. */
+export type AstcModel = 'reference' | 'positions'
+
 export interface Inputs {
-  /* ---------------- materials ---------------- */
-  /** Steel I-section modulus of elasticity, N/mm^2 */
-  Es: number
-  /** Steel I-section yield strength, N/mm^2 */
-  fy: number
-  /** Partial factor for structural steel */
-  gammaM0: number
-  /** Concrete secant modulus, N/mm^2 */
-  Ecm: number
-  /** Concrete characteristic cylinder strength, N/mm^2 */
+  /* ---------------- material grades ---------------- */
+  /** selected concrete grade id (or 'custom') */
+  concreteGrade: string
+  /** selected reinforcement grade id (or 'custom') */
+  rebarGrade: string
+  /** selected structural steel grade id (or 'custom') */
+  steelGrade: string
+
+  /* ---------------- materials (characteristic values) ---------------- */
+  /** Concrete characteristic cylinder strength, N/mm² */
   fck: number
   /** Partial factor for concrete */
   gammaC: number
+  /** Concrete secant modulus, N/mm² */
+  Ecm: number
   /** Concrete stress-block coefficient (0.85 in the reference) */
   alphaC: number
   /** Coefficient alpha_cc of the concrete design strength */
   alphaCC: number
   /** Efficiency/utilisation factor eta */
   eta: number
-  /** Reinforcement modulus of elasticity, N/mm^2 */
-  Est: number
-  /** Reinforcement characteristic yield strength, N/mm^2 */
+
+  /** Reinforcement characteristic yield strength, N/mm² */
   fyk: number
+  /** Reinforcement modulus of elasticity, N/mm² */
+  Est: number
   /** Partial factor for reinforcement */
   gammaK: number
+
+  /** Structural steel yield strength, N/mm² */
+  fy: number
+  /** Structural steel ultimate strength, N/mm² (not used by the simplified method) */
+  fu: number
+  /** Structural steel modulus of elasticity, N/mm² */
+  Es: number
+  /** Partial factor for structural steel */
+  gammaM0: number
+
+  /* ---------------- units ---------------- */
+  units: UnitSettings
 
   /* ---------------- member ---------------- */
   /** Effective length factor about the y-axis */
@@ -64,25 +125,36 @@ export interface Inputs {
   /** Live bending moment about the y-axis (minor axis), kN-m */
   My: number
 
-  /* ---------------- cross-section ---------------- */
+  /* ---------------- concrete section ---------------- */
+  sectionType: SectionType
   /** Concrete width (z direction), mm */
   bc: number
   /** Concrete depth (y direction), mm */
   hc: number
+  /** Clear/effective cover of the outermost reinforcement, mm */
+  cover: number
+  /** Slab width, mm (sectionType = 'rect-slab') */
+  slabWidth: number
+  /** Slab thickness, mm (sectionType = 'rect-slab') */
+  slabThickness: number
+
+  /* ---------------- embedded steel I-section ---------------- */
   /** Overall depth of the embedded steel I-section (y direction), mm */
   h: number
   /** Flange width of the embedded steel I-section (z direction), mm */
   bf: number
-  /** Flange thickness, mm */
-  tf: number
   /** Web thickness, mm */
   tw: number
-  /** Reinforcement bar diameter, mm */
-  db: number
-  /** Number of bars */
-  n: number
-  /** Bar eccentricity from the centroid, both axes, mm */
-  e: number
+  /** Flange thickness, mm */
+  tf: number
+  /** Root radius of the rolled section, mm (drawing / detailing only) */
+  r: number
+
+  /* ---------------- reinforcement ---------------- */
+  /** bar position table */
+  bars: BarRow[]
+  /** how Astc (and Zprn) are derived */
+  astcModel: AstcModel
 
   /* ---------------- advanced overrides ---------------- */
   /** Adopted neutral-axis depth about z (mm); null → use the closed form */
@@ -148,7 +220,7 @@ export interface AxisResult {
   /** adopted neutral-axis depth, mm (equals hn unless overridden) */
   hnAdopted: number
   hnOverridden: boolean
-  /** reinforcement area assumed in the compression zone (2 bars) */
+  /** reinforcement area assumed in the compression zone / 2hn band */
   astc: number
   /** plastic modulus of reinforcement within 2hn, mm^3 */
   zprn: number
@@ -195,10 +267,60 @@ export interface AxisResult {
   muDD: number
   /** M / (muDD * Md) */
   dcMoment: number
-  /** interaction curve (smoothed, through A-C-D-B) */
+  /** interaction curve (smoothed, through A-B-C-D) */
   curve: Point[]
-  /** simplified bilinear curve (A-C-B) */
+  /** simplified bilinear curve (A-B-D) */
   bilinear: Point[]
+}
+
+/** One resolved bar of the reinforcement table (spread applied). */
+export interface BarInstance {
+  rowId: string
+  label: string
+  layer: string
+  db: number
+  /** area of a single bar, mm² */
+  area: number
+  /** position from the section centroid, mm */
+  x: number
+  y: number
+  /** distance from the nearest concrete face, mm */
+  cover?: number
+}
+
+export interface BarsSummary {
+  instances: BarInstance[]
+  /** total reinforcement area, mm² */
+  Ast: number
+  /** second moment of the reinforcement about the z and y axes, mm^4 */
+  IstZ: number
+  IstY: number
+  /** plastic modulus of the reinforcement about the z and y axes, mm^3 */
+  ZprZ: number
+  ZprY: number
+  /** diameter of the largest bar, mm */
+  dbMax: number
+  /** number of bars */
+  count: number
+}
+
+export interface ConcreteGeometry {
+  /** encasement width / depth, mm */
+  bc: number
+  hc: number
+  /** slab, mm (0 when the section has no slab) */
+  slabWidth: number
+  slabThickness: number
+  /** concrete area including the slab, mm² */
+  Ac: number
+  /** second moments about the reference axes (encasement centroid), mm^4 */
+  IcZ: number
+  IcY: number
+  /** plastic section moduli of the concrete outline about the reference axes, mm³ */
+  ZpcZ: number
+  ZpcY: number
+  /** offset of the slab centroid above the reference axis, mm */
+  slabOffsetY: number
 }
 
 export interface Results {
@@ -222,9 +344,12 @@ export interface Results {
   rebar: {
     Astb: number
     Ast: number
-    IstI: number
     IstZ: number
+    IstY: number
     ZprZ: number
+    ZprY: number
+    count: number
+    dbMax: number
   }
   concrete: {
     Ac: number
@@ -232,7 +357,10 @@ export interface Results {
     IcY: number
     ZpcZ: number
     ZpcY: number
+    /** area added by the slab, mm² (0 for a plain rectangular encasement) */
+    Aslab: number
   }
+  bars: BarsSummary
   /* member / simplified method */
   member: {
     EIeZ: number
@@ -274,5 +402,3 @@ export interface Results {
   keyPoints: Record<Axis, { A: Point; B: Point; C: Point; D: Point }>
   groups: StepGroup[]
 }
-
-

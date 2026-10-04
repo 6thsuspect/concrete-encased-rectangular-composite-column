@@ -71,38 +71,75 @@ export function ReportView({
             ]}
           />
           <Table
-            caption="Section"
+            caption={`Concrete section — ${inputs.sectionType === 'rect-slab' ? 'encasement + slab' : 'rectangular encasement'}`}
             rows={[
               ['bc', fmt(inputs.bc, 0), 'mm'],
               ['hc', fmt(inputs.hc, 0), 'mm'],
-              ['h', fmt(inputs.h, 0), 'mm'],
-              ['bf', fmt(inputs.bf, 0), 'mm'],
-              ['tf', fmt(inputs.tf, 1), 'mm'],
-              ['tw', fmt(inputs.tw, 1), 'mm'],
+              ['cover', fmt(inputs.cover, 0), 'mm'],
+              ...(inputs.sectionType === 'rect-slab'
+                ? ([
+                    ['bs', fmt(inputs.slabWidth, 0), 'mm'],
+                    ['ts', fmt(inputs.slabThickness, 0), 'mm'],
+                  ] as [string, string, string][])
+                : []),
             ]}
           />
           <Table
-            caption="Reinforcement / member"
+            caption="Steel I-section"
             rows={[
-              ['db', fmt(inputs.db, 0), 'mm'],
-              ['n', fmt(inputs.n, 0), 'nos.'],
-              ['e', fmt(inputs.e, 0), 'mm'],
-              ['Ly = Lz', fmt(inputs.Ly, 0), 'mm'],
-              ['Ky = Kz', fmt(inputs.Ky, 2), '—'],
+              ['h', fmt(inputs.h, 0), 'mm'],
+              ['bf', fmt(inputs.bf, 0), 'mm'],
+              ['tw', fmt(inputs.tw, 1), 'mm'],
+              ['tf', fmt(inputs.tf, 1), 'mm'],
+              ['r', fmt(inputs.r, 1), 'mm'],
+            ]}
+          />
+          <Table
+            caption="Member"
+            rows={[
+              ['Ly', fmt(inputs.Ly, 0), 'mm'],
+              ['Lz', fmt(inputs.Lz, 0), 'mm'],
+              ['Ky', fmt(inputs.Ky, 2), '—'],
+              ['Kz', fmt(inputs.Kz, 2), '—'],
+              ['ψ = M1/M2', fmt(inputs.psi, 2), '—'],
             ]}
           />
           <Table
             caption="Materials"
             rows={[
-              ['fy', fmt(inputs.fy, 0), 'N/mm²'],
-              ['Es', fmt(inputs.Es, 0), 'N/mm²'],
-              ['γm0', fmt(inputs.gammaM0, 2), '—'],
+              ['concrete', inputs.concreteGrade, ''],
               ['fck', fmt(inputs.fck, 0), 'N/mm²'],
-              ['Ecm', fmt(inputs.Ecm, 0), 'N/mm²'],
               ['γc', fmt(inputs.gammaC, 2), '—'],
+              ['Ecm', fmt(inputs.Ecm, 0), 'N/mm²'],
+              ['reinforcement', inputs.rebarGrade, ''],
               ['fyk', fmt(inputs.fyk, 0), 'N/mm²'],
-              ['γk', fmt(inputs.gammaK, 2), '—'],
+              ['Es', fmt(inputs.Est, 0), 'N/mm²'],
+              ['γs', fmt(inputs.gammaK, 2), '—'],
+              ['steel', inputs.steelGrade, ''],
+              ['fy', fmt(inputs.fy, 0), 'N/mm²'],
+              ['fu', fmt(inputs.fu, 0), 'N/mm²'],
+              ['E', fmt(inputs.Es, 0), 'N/mm²'],
+              ['γm0', fmt(inputs.gammaM0, 2), '—'],
             ]}
+          />
+        </div>
+
+        <div className="mt-4">
+          <Table
+            caption="Reinforcement position table (mm from the concrete centroid)"
+            rows={
+              inputs.bars.length
+                ? inputs.bars.map((row, i) => [
+                    row.label || `B${i + 1}`,
+                    `${row.count} × ⌀${fmt(row.db, 0)} mm ` +
+                      (row.spread === 'corner'
+                        ? `at (±${fmt(row.x, 0)}, ±${fmt(row.y, 0)})`
+                        : `at (${fmt(row.x, 0)}, ${fmt(row.y, 0)})`) +
+                      `${row.layer ? ` · layer ${row.layer}` : ''}${row.cover ? ` · cover ${fmt(row.cover, 0)} mm` : ''}`,
+                    '',
+                  ] as [string, string, string])
+                : [['—', 'no reinforcement rows', ''] as [string, string, string]]
+            }
           />
         </div>
       </Section>

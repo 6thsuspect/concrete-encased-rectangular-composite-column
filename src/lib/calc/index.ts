@@ -12,7 +12,7 @@ export { ceilTo, interactionCurve, bilinearCurve } from './interaction'
  * composite column (CSI CCD Example 001).
  */
 export function computeAll(i: Inputs): Results {
-  const { props: s, group: sectionGroup } = sectionProperties(i)
+  const { props: s, dataGroup, group: sectionGroup } = sectionProperties(i)
   const mem = memberResults(i, s)
 
   const z = axisCalc(i, s, mem, 'z')
@@ -38,8 +38,25 @@ export function computeAll(i: Inputs): Results {
     inputs: i,
     required: { P: s.P, MzMid: s.MzMid, MyMid: s.MyMid, Vy: s.Vy, Vz: s.Vz },
     steel: { As: s.As, IsZ: s.IsZ, IsY: s.IsY, ZpsZ: s.ZpsZ, ZpsY: s.ZpsY },
-    rebar: { Astb: s.Astb, Ast: s.Ast, IstI: s.IstI, IstZ: s.IstZ, ZprZ: s.ZprZ },
-    concrete: { Ac: s.Ac, IcZ: s.IcZ, IcY: s.IcY, ZpcZ: s.ZpcZ, ZpcY: s.ZpcY },
+    rebar: {
+      Astb: s.bars.count > 0 ? s.Ast / s.bars.count : 0,
+      Ast: s.Ast,
+      IstZ: s.IstZ,
+      IstY: s.IstY,
+      ZprZ: s.ZprZ,
+      ZprY: s.ZprY,
+      count: s.bars.count,
+      dbMax: s.bars.dbMax,
+    },
+    bars: s.bars,
+    concrete: {
+      Ac: s.Ac,
+      IcZ: s.IcZ,
+      IcY: s.IcY,
+      ZpcZ: s.ZpcZ,
+      ZpcY: s.ZpcY,
+      Aslab: s.concrete.slabWidth * s.concrete.slabThickness,
+    },
     member: {
       EIeZ: mem.EIeZ,
       EIeY: mem.EIeY,
@@ -90,6 +107,6 @@ export function computeAll(i: Inputs): Results {
         D: { m: y.Md, p: 0 },
       },
     },
-    groups: [sectionGroup, mem.memberGroup, mem.globalGroup, z.group, y.group, shear.group, dc.group],
+    groups: [dataGroup, sectionGroup, mem.memberGroup, mem.globalGroup, z.group, y.group, shear.group, dc.group],
   }
 }

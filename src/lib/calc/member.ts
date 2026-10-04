@@ -41,7 +41,7 @@ export function memberResults(i: Inputs, s: SectionProps): MemberResult {
 
   /* ---------------- effective flexural stiffness (simplified method) ---------------- */
   const EIeZ = (i.Es * s.IsZ + 0.6 * i.Ecm * s.IcZ + i.Est * s.IstZ) / 1e9 // kN-m^2
-  const EIeY = (i.Es * s.IsY + 0.6 * i.Ecm * s.IcY + i.Est * s.IstZ) / 1e9
+  const EIeY = (i.Es * s.IsY + 0.6 * i.Ecm * s.IcY + i.Est * s.IstY) / 1e9
 
   const LzM = (i.Kz * i.Lz) / 1000
   const LyM = (i.Ky * i.Ly) / 1000
@@ -112,11 +112,12 @@ export function memberResults(i: Inputs, s: SectionProps): MemberResult {
         symbol: '(EI)e,y',
         label: 'effective flexural stiffness, minor axis',
         formula: 'Es Is,y + 0.6 Ecm Ic,y + Est Ist,y',
-        substitution: `= (${n(i.Es, 0)} × ${n(s.IsY, 0)} + 0.6 × ${n(i.Ecm, 0)} × ${n(s.IcY, 0)} + ${n(i.Est, 0)} × ${n(s.IstZ, 0)}) / 10⁹`,
+        substitution: `= (${n(i.Es, 0)} × ${n(s.IsY, 0)} + 0.6 × ${n(i.Ecm, 0)} × ${n(s.IcY, 0)} + ${n(i.Est, 0)} × ${n(s.IstY, 0)}) / 10⁹`,
         value: EIeY,
         unit: 'kN-m²',
         decimals: 1,
         ref: '4.z-Buckling!E9',
+        note: 'the reinforcement term uses Ist,y; the workbook copies Ist,z here, which is identical for the symmetric reference cage',
       },
       {
         id: 'PcrZ',

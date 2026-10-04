@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -67,6 +67,21 @@ ipcMain.handle('file:save', async (_event, options: { suggestedName: string; con
   if (canceled || !filePath) return { saved: false }
   await writeFile(filePath, options.contents, 'utf8')
   return { saved: true, path: filePath }
+})
+
+ipcMain.handle('file:open', async (_event, options?: { extensions?: string[] }) => {
+  if (!mainWindow) return { opened: false }
+  const extensions = options?.extensions ?? ['json']
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Input file', extensions },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  if (canceled || filePaths.length === 0) return { opened: false }
+  const contents = await readFile(filePaths[0], 'utf8')
+  return { opened: true, contents, path: filePaths[0] }
 })
 
 ipcMain.handle('window:print', async () => {

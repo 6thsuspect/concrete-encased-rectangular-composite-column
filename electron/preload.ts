@@ -7,6 +7,8 @@ const api = {
   version: process.versions.electron,
   saveFile: (options: { suggestedName: string; contents: string }): Promise<{ saved: boolean; path?: string }> =>
     ipcRenderer.invoke('file:save', options),
+  openFile: (options?: { extensions?: string[] }): Promise<{ opened: boolean; contents?: string; path?: string }> =>
+    ipcRenderer.invoke('file:open', options),
   print: (): void => {
     void ipcRenderer.invoke('window:print')
   },

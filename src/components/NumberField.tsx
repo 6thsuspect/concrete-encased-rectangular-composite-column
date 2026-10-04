@@ -65,6 +65,7 @@ export function NumberField({
           id={id}
           type="text"
           inputMode="decimal"
+          data-field={symbol ?? label}
           spellCheck={false}
           value={text}
           step={step}

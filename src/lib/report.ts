@@ -101,6 +101,7 @@ export function buildReportHtml(
   dl.meta dt { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   dl.meta dd { margin: 0; font-weight: 500; }
   .cols { display:grid; grid-template-columns: repeat(4, 1fr); gap: 6px 20px; }
+  .cols.one { grid-template-columns: 1fr; }
   .tbl h3 { margin: 0 0 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   table { width: 100%; border-collapse: collapse; }
   td, th { padding: 3px 6px 3px 0; text-align: left; vertical-align: top; }
@@ -148,31 +149,61 @@ export function buildReportHtml(
     ['Mz', num(inputs.Mz, 0), 'kN-m'],
     ['My', num(inputs.My, 0), 'kN-m'],
   ])}
-  ${inputTable('Section', [
+  ${inputTable('Concrete section', [
+    ['type', inputs.sectionType === 'rect-slab' ? 'rect + slab' : 'rectangular', ''],
     ['bc', num(inputs.bc, 0), 'mm'],
     ['hc', num(inputs.hc, 0), 'mm'],
+    ['cover', num(inputs.cover, 0), 'mm'],
+    ...(inputs.sectionType === 'rect-slab'
+      ? ([
+          ['bs', num(inputs.slabWidth, 0), 'mm'],
+          ['ts', num(inputs.slabThickness, 0), 'mm'],
+        ] as [string, string, string][])
+      : []),
+  ])}
+  ${inputTable('Steel I-section', [
     ['h', num(inputs.h, 0), 'mm'],
     ['bf', num(inputs.bf, 0), 'mm'],
-    ['tf', num(inputs.tf, 1), 'mm'],
     ['tw', num(inputs.tw, 1), 'mm'],
+    ['tf', num(inputs.tf, 1), 'mm'],
+    ['r', num(inputs.r, 1), 'mm'],
   ])}
-  ${inputTable('Reinforcement / member', [
-    ['db', num(inputs.db, 0), 'mm'],
-    ['n', num(inputs.n, 0), 'nos.'],
-    ['e', num(inputs.e, 0), 'mm'],
-    ['Ly = Lz', num(inputs.Ly, 0), 'mm'],
-    ['Ky = Kz', num(inputs.Ky, 2), '—'],
+  ${inputTable('Member', [
+    ['Ly', num(inputs.Ly, 0), 'mm'],
+    ['Lz', num(inputs.Lz, 0), 'mm'],
+    ['Ky', num(inputs.Ky, 2), '—'],
+    ['Kz', num(inputs.Kz, 2), '—'],
+    ['ψ = M1/M2', num(inputs.psi, 2), '—'],
   ])}
   ${inputTable('Materials', [
-    ['fy', num(inputs.fy, 0), 'N/mm²'],
-    ['Es', num(inputs.Es, 0), 'N/mm²'],
-    ['γm0', num(inputs.gammaM0, 2), '—'],
+    ['concrete', `${inputs.concreteGrade}`, ''],
     ['fck', num(inputs.fck, 0), 'N/mm²'],
-    ['Ecm', num(inputs.Ecm, 0), 'N/mm²'],
     ['γc', num(inputs.gammaC, 2), '—'],
+    ['Ecm', num(inputs.Ecm, 0), 'N/mm²'],
+    ['reinforcement', `${inputs.rebarGrade}`, ''],
     ['fyk', num(inputs.fyk, 0), 'N/mm²'],
-    ['γk', num(inputs.gammaK, 2), '—'],
+    ['Es', num(inputs.Est, 0), 'N/mm²'],
+    ['γs', num(inputs.gammaK, 2), '—'],
+    ['steel', `${inputs.steelGrade}`, ''],
+    ['fy', num(inputs.fy, 0), 'N/mm²'],
+    ['fu', num(inputs.fu, 0), 'N/mm²'],
+    ['E', num(inputs.Es, 0), 'N/mm²'],
+    ['γm0', num(inputs.gammaM0, 2), '—'],
   ])}
+</div>
+<div class="cols one">
+  ${inputTable(
+    'Reinforcement position table (mm from the concrete centroid)',
+    inputs.bars.length
+      ? inputs.bars.map((row, i) => [
+          row.label || `B${i + 1}`,
+          `${row.count} × ⌀${num(row.db, 0)} mm ` +
+            (row.spread === 'corner' ? `at (±${num(row.x, 0)}, ±${num(row.y, 0)})` : `at (${num(row.x, 0)}, ${num(row.y, 0)})`) +
+            `${row.layer ? ` · layer ${row.layer}` : ''}${row.cover ? ` · cover ${num(row.cover, 0)} mm` : ''}`,
+          '',
+        ])
+      : [['—', 'no reinforcement rows', '']],
+  )}
 </div>
 
 ${figures.length ? `<h2>2. Section and member</h2><div class="figs">${figureHtml}</div>` : ''}

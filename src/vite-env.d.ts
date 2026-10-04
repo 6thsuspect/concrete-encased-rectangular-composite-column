@@ -6,6 +6,7 @@ export interface DesktopApi {
   platform: string
   version: string
   saveFile(options: { suggestedName: string; contents: string }): Promise<{ saved: boolean; path?: string }>
+  openFile(options?: { extensions?: string[] }): Promise<{ opened: boolean; contents?: string; path?: string }>
   print(): void
 }
 

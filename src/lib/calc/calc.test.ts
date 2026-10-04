@@ -134,7 +134,7 @@ describe('presets and overrides', () => {
       expect(Number.isFinite(res.dc.total)).toBe(true)
       expect(res.member.Pd).toBeGreaterThan(0)
       expect(Number.isFinite(res.member.lambdaY)).toBe(true)
-      expect(res.groups.length).toBe(7)
+      expect(res.groups.length).toBe(8)
     }
   })
 

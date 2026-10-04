@@ -55,20 +55,60 @@ describe('components', () => {
     expect(html).toContain('No input problems detected.')
   })
 
-  it('renders the input panel', () => {
+  it('renders the input panel with every input group', () => {
+    const noop = () => undefined
     const html = renderToStaticMarkup(
       <InputPanel
         inputs={DEFAULT_INPUTS}
         results={results}
-        setInput={() => undefined}
-        onPreset={() => undefined}
-        onReset={() => undefined}
+        problems={inputProblems(DEFAULT_INPUTS)}
+        setInput={noop}
+        patchInputs={noop}
+        onPreset={noop}
+        onReset={noop}
         activePresetId="reference"
+        onSaveInputs={noop}
+        onLoadInputs={noop}
+        onExportReport={noop}
+        onExportJson={noop}
+        onExportCsv={noop}
+        onPrint={noop}
       />,
     )
-    expect(html).toContain('Cross-section')
+    expect(html).toContain('Concrete section &amp; steel I-section')
     expect(html).toContain('Loadings')
     expect(html).toContain('Slender member, L = 14 m')
+    expect(html).toContain('Concrete grade')
+    expect(html).toContain('Structural steel grade')
+    expect(html).toContain('Reinforcement inside the compression zone')
+    expect(html).toContain('Add row')
+    expect(html).toContain('All inputs are valid.')
+  })
+
+  it('renders the reinforcement table rows and the 2D preview', () => {
+    const noop = () => undefined
+    const html = renderToStaticMarkup(
+      <InputPanel
+        inputs={DEFAULT_INPUTS}
+        results={results}
+        problems={inputProblems(DEFAULT_INPUTS)}
+        setInput={noop}
+        patchInputs={noop}
+        onPreset={noop}
+        onReset={noop}
+        activePresetId={null}
+        onSaveInputs={noop}
+        onLoadInputs={noop}
+        onExportReport={noop}
+        onExportJson={noop}
+        onExportCsv={noop}
+        onPrint={noop}
+      />,
+    )
+    expect(html).toContain('aria-label="Bar diameter of row B1"')
+    expect(html).toContain('aria-label="X of row B1"')
+    expect(html).toContain('452.4')
+    expect(html).toContain('<svg')
   })
 
   it('renders the printable report', () => {

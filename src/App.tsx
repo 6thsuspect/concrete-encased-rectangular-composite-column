@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { computeAll } from './lib/calc'
-import { inputProblems } from './lib/calc/defaults'
+import { inputProblems, type InputProblem } from './lib/calc/defaults'
 import { useInputs } from './hooks/useInputs'
+import { inputsFromJson, openInputFile, saveInputs } from './lib/inputIO'
 import { Header } from './components/Header'
 import { InputPanel } from './components/InputPanel'
 import { SummaryPanel } from './components/SummaryPanel'
@@ -10,7 +11,7 @@ import { ValidationPanel } from './components/ValidationPanel'
 import { ReportView, DEFAULT_META } from './components/ReportView'
 import { InteractionChart } from './components/InteractionChart'
 import { ExportFigures } from './components/ExportFigures'
-import { Button, cx } from './components/ui'
+import { Badge, Button, cx } from './components/ui'
 import { exportCsv, exportJson, exportReport, printReport } from './lib/exportData'
 
 const APP_VERSION = '1.0.0'
@@ -26,7 +27,7 @@ const TABS: { id: TabId; label: string }[] = [
 ]
 
 export default function App() {
-  const { inputs, setInput, reset, applyPreset, activePresetId, share } = useInputs()
+  const { inputs, setInput, patchInputs, replaceInputs, reset, applyPreset, activePresetId, share } = useInputs()
   const [tab, setTab] = useState<TabId>('summary')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [dark, setDark] = useState<boolean>(() => {
@@ -40,6 +41,7 @@ export default function App() {
 
   const results = useMemo(() => computeAll(inputs), [inputs])
   const problems = useMemo(() => inputProblems(inputs), [inputs])
+  const blocking = problems.filter((p) => p.level === 'error')
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -75,6 +77,23 @@ export default function App() {
     notify(saved ? 'Calculation steps exported as CSV' : 'Export cancelled')
   }, [results, notify])
 
+  const handleSaveInputs = useCallback(async () => {
+    const saved = await saveInputs(inputs)
+    notify(saved ? 'Input file saved' : 'Save cancelled')
+  }, [inputs, notify])
+
+  const handleLoadInputs = useCallback(async () => {
+    const contents = await openInputFile(['json'])
+    if (contents === null) return
+    const loaded = inputsFromJson(contents)
+    if (!loaded) {
+      notify('That file is not a valid input file')
+      return
+    }
+    replaceInputs(loaded)
+    notify('Input file loaded')
+  }, [replaceInputs, notify])
+
   const handlePrint = useCallback(() => {
     setTab('report')
     // print on a light surface: the dark scheme would produce unreadable pages
@@ -107,6 +126,7 @@ export default function App() {
         onShare={handleShare}
         shareState={shareState}
         isDesktop={Boolean(window.desktop)}
+        blocked={blocking.length > 0}
       />
 
       <div className="mx-auto flex max-w-[1600px] gap-4 px-4 py-4">
@@ -129,13 +149,21 @@ export default function App() {
             <InputPanel
               inputs={inputs}
               results={results}
+              problems={problems}
               setInput={setInput}
+              patchInputs={patchInputs}
               onPreset={(p) => {
                 applyPreset(p)
                 if (window.innerWidth < 1024) setSidebarOpen(false)
               }}
               onReset={reset}
               activePresetId={activePresetId}
+              onSaveInputs={handleSaveInputs}
+              onLoadInputs={handleLoadInputs}
+              onExportReport={handleExportReport}
+              onExportJson={handleExportJson}
+              onExportCsv={handleExportCsv}
+              onPrint={handlePrint}
             />
             <div className="border-t border-ink-200/70 px-4 py-3 text-[11px] text-ink-500 dark:border-ink-800 dark:text-ink-400">
               Results update as you type. Everything is computed locally — nothing leaves this device.
@@ -164,6 +192,8 @@ export default function App() {
             ))}
           </nav>
 
+          {blocking.length > 0 ? <BlockedPanel problems={blocking} /> : (
+          <>
           {tab === 'summary' && <SummaryPanel inputs={inputs} results={results} />}
 
           {tab === 'interaction' && (
@@ -214,6 +244,8 @@ export default function App() {
           {tab === 'validation' && <ValidationPanel results={results} problems={problems} />}
 
           {tab === 'report' && <ReportView inputs={inputs} results={results} meta={DEFAULT_META} />}
+          </>
+          )}
         </main>
       </div>
 
@@ -230,6 +262,30 @@ export default function App() {
         001”. This application is an independent implementation of the simplified interaction-curve method and
         does not replace engineering judgement or the governing code.
       </footer>
+    </div>
+  )
+}
+
+/** Shown instead of the results while the input set contains blocking errors. */
+function BlockedPanel({ problems }: { problems: InputProblem[] }) {
+  return (
+    <div className="rounded-xl border border-rose-500/30 bg-rose-50 p-5 dark:border-rose-500/30 dark:bg-rose-500/10">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-rose-800 dark:text-rose-200">
+        <Badge status="fail">input error{problems.length === 1 ? '' : 's'}</Badge>
+        Calculation stopped — fix the input{problems.length === 1 ? '' : 's'} first
+      </h2>
+      <p className="mt-2 text-xs leading-relaxed text-rose-800/90 dark:text-rose-200/90">
+        Every input is validated before the calculation runs. The list below shows what has to be corrected; the
+        results, diagrams and exports become available again as soon as the input set is consistent.
+      </p>
+      <ul className="mt-3 space-y-1.5">
+        {problems.map((p, i) => (
+          <li key={i} className="flex items-start gap-2 text-xs leading-relaxed text-rose-900 dark:text-rose-100">
+            <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+            {p.message}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

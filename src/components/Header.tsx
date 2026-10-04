@@ -15,6 +15,8 @@ interface Props {
   onShare: () => void
   shareState: 'idle' | 'copied'
   isDesktop: boolean
+  /** true while the input set contains blocking errors */
+  blocked?: boolean
 }
 
 export function Header({
@@ -30,6 +32,7 @@ export function Header({
   onShare,
   shareState,
   isDesktop,
+  blocked = false,
 }: Props) {
   const dc = results.dc.total
   const adequate = dc <= 1
@@ -61,10 +64,19 @@ export function Header({
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="hidden items-baseline gap-2 rounded-lg bg-ink-100 px-2.5 py-1.5 sm:flex dark:bg-ink-800/70">
             <span className="text-[10px] tracking-wide text-ink-500 uppercase dark:text-ink-400">D/C</span>
-            <span className={cx('tabular text-sm font-semibold', adequate ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
-              {fmt(dc, 3)}
-            </span>
-            <Badge status={adequate ? 'ok' : 'fail'}>{adequate ? 'Adequate' : 'Not adequate'}</Badge>
+            {blocked ? (
+              <>
+                <span className="tabular text-sm font-semibold text-ink-400 dark:text-ink-500">—</span>
+                <Badge status="fail">check inputs</Badge>
+              </>
+            ) : (
+              <>
+                <span className={cx('tabular text-sm font-semibold', adequate ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
+                  {fmt(dc, 3)}
+                </span>
+                <Badge status={adequate ? 'ok' : 'fail'}>{adequate ? 'Adequate' : 'Not adequate'}</Badge>
+              </>
+            )}
           </div>
 
           <Button variant="ghost" size="sm" onClick={onShare} title="Copy a shareable link with the current inputs">
