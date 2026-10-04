@@ -2,6 +2,69 @@ import type { BarInstance, Inputs } from '../lib/types'
 import { fmt } from '../lib/format'
 import { barInstances } from '../lib/calc/geometry'
 
+/** Vertices of the embedded I-section silhouette, clockwise in drawing coordinates. */
+export function iSectionOutline(
+  i: Inputs,
+  x: (z: number) => number,
+  y: (value: number) => number,
+): { x: number; y: number }[] {
+  const x1 = x(-i.bf / 2)
+  const x2 = x(i.bf / 2)
+  const xw1 = x(-i.tw / 2)
+  const xw2 = x(i.tw / 2)
+  const y0 = y(i.h / 2)
+  const y1 = y(i.h / 2 - i.tf)
+  const y2 = y(-i.h / 2 + i.tf)
+  const y3 = y(-i.h / 2)
+  return [
+    { x: x1, y: y0 },
+    { x: x2, y: y0 },
+    { x: x2, y: y1 },
+    { x: xw2, y: y1 }, // concave (web, top right)
+    { x: xw2, y: y2 }, // concave (web, bottom right)
+    { x: x2, y: y2 },
+    { x: x2, y: y3 },
+    { x: x1, y: y3 },
+    { x: x1, y: y2 },
+    { x: xw1, y: y2 }, // concave (web, bottom left)
+    { x: xw1, y: y1 }, // concave (web, top left)
+    { x: x1, y: y1 },
+  ]
+}
+
+/** Indices of the concave web/flange corners where the root radius is drawn. */
+const CONCAVE = new Set([3, 4, 9, 10])
+
+/**
+ * SVG path through the outline vertices; the four concave corners are rounded
+ * with a quadratic segment so that the root radius `r` shows in the drawing.
+ */
+export function iSectionPath(points: { x: number; y: number }[], fillet: number): string {
+  const n = (v: number) => Math.round(v * 100) / 100
+  const at = (k: number) => points[(k + points.length) % points.length]
+  const out: string[] = [`M${n(points[0].x)} ${n(points[0].y)}`]
+  for (let k = 1; k <= points.length; k++) {
+    const prev = at(k - 1)
+    const cur = at(k)
+    const next = at(k + 1)
+    if (k < points.length && fillet > 0.05 && CONCAVE.has(k)) {
+      const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y) || 1
+      const outLen = Math.hypot(next.x - cur.x, next.y - cur.y) || 1
+      const fi = Math.min(fillet, inLen / 2)
+      const fo = Math.min(fillet, outLen / 2)
+      const sx = cur.x - ((cur.x - prev.x) / inLen) * fi
+      const sy = cur.y - ((cur.y - prev.y) / inLen) * fi
+      const ex = cur.x + ((next.x - cur.x) / outLen) * fo
+      const ey = cur.y + ((next.y - cur.y) / outLen) * fo
+      out.push(`L${n(sx)} ${n(sy)}`, `Q${n(cur.x)} ${n(cur.y)} ${n(ex)} ${n(ey)}`)
+    } else {
+      out.push(`L${n(cur.x)} ${n(cur.y)}`)
+    }
+  }
+  out.push('Z')
+  return out.join(' ')
+}
+
 interface Props {
   inputs: Inputs
   className?: string
@@ -42,40 +105,22 @@ export function CrossSection({ inputs, className, preview = false }: Props) {
   const bars: BarInstance[] = barInstances(inputs.bars)
   const barR = (db: number) => Math.max((db * scale) / 2, preview ? 1.4 : 1.8)
   const tfPx = Math.max(tf * scale, 1.2)
-  const fillet = Math.min(Math.max(r * scale, 0), Math.min((bf - tw) * scale * 0.45, tfPx * 1.2))
   const steelX = px(-bf / 2)
   const steelY = py(h / 2)
   const steelH = h * scale
+  const hb = bf * scale
   const dim = '#94a3b8'
   const text = '#475569'
   const dims = !preview
 
-  /* I-section silhouette with root radii at the four web/flange junctions */
-  const hb = bf * scale
-  const x1 = steelX
-  const x2 = steelX + hb
-  const xw2 = px(tw / 2)
-  const f = fillet
-  const iPath = [
-    `M${x1} ${steelY}`,
-    `H${x2}`,
-    `V${steelY + tfPx}`,
-    `H${xw2 + f}`,
-    `Q${xw2} ${steelY + tfPx} ${xw2} ${steelY + tfPx + f}`,
-    `V${steelY + steelH - tfPx - f}`,
-    `Q${xw2} ${steelY + steelH - tfPx} ${xw2 + f} ${steelY + steelH - tfPx}`,
-    `H${x1}`,
-    `Z`,
-    `M${x1} ${steelY + steelH}`,
-    `H${x2}`,
-    `V${steelY + steelH - tfPx}`,
-    `H${xw2 + f}`,
-    `Q${xw2} ${steelY + steelH - tfPx} ${xw2} ${steelY + steelH - tfPx - f}`,
-    `V${steelY + tfPx + f}`,
-    `Q${xw2} ${steelY + tfPx} ${xw2 + f} ${steelY + tfPx}`,
-    `H${x1}`,
-    `Z`,
-  ].join(' ')
+  /* I-section silhouette (both flanges *and* the web) with the root radii
+     rounded at the four web/flange junctions */
+  const outline = iSectionOutline(inputs, px, py)
+  const filletPx = Math.max(
+    0,
+    Math.min((r * scale), ((bf - tw) / 2) * scale * 0.9, tfPx * 1.2, (steelH - 2 * tfPx) / 2 - 0.5),
+  )
+  const iPath = iSectionPath(outline, filletPx)
 
   return (
     <svg

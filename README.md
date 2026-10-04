@@ -32,7 +32,7 @@ npm run dev          # → http://localhost:5173   web app with hot reload
 npm run dev:desktop  # → same dev server inside an Electron window
 npm run build        # type-checks and produces a static bundle in dist/
 npm run build:desktop# static bundle + dist-electron/ + installers in release/
-npm test             # 70 unit / rendering tests (engine, inputs, UI)
+npm test             # 72 unit / rendering tests (engine, inputs, UI)
 npm run typecheck    # tsc --noEmit for the app and for the Electron/Node code
 npm run preview      # serve the production bundle locally
 ```
@@ -140,9 +140,10 @@ The input set is also written to `localStorage` on every keystroke, so a reload 
 
 ### 2-D section preview
 
-`CrossSection` draws the concrete outline (including the slab, if selected), the embedded I-section with its
-root radius `r` and every bar of the table with its true diameter and position, together with the principal
-dimensions. It appears in the *Reinforcement* group of the input panel (compact), in the *Summary* tab and as
+`CrossSection` draws the concrete outline (including the slab, if selected), the embedded I-section as a single
+closed silhouette — top flange, **web** and bottom flange, with the root radius `r` rounded at the four
+web/flange junctions — and every bar of the table with its true diameter and position, together with the
+principal dimensions. It appears in the *Reinforcement* group of the input panel (compact), in the *Summary* tab and as
 figure 1 of the report/HTML export. Bars outside the concrete outline or overlapping the steel section are
 reported by the validation.
 
